@@ -1,26 +1,37 @@
 <script setup>
 import { useUiStore } from './stores/ui'
+import ChatView from './components/ChatView.vue'
 
 const ui = useUiStore()
 </script>
 
 <template>
-  <main class="shell">
+  <header class="bar">
     <h1>small_dify Agent</h1>
-    <p class="stage">
-      P0 脚手架已就绪。对话面板、执行轨迹与审批弹窗在 P7 接入。
+    <p class="mode-line">
+      运行模式：<strong data-testid="mode">{{ ui.mode }}</strong>
+      <span class="hint">（切换开关在右下角对话面板顶栏，作用于下一条消息）</span>
     </p>
-    <p class="mode">当前运行模式：<strong data-testid="mode">{{ ui.mode }}</strong></p>
-  </main>
+  </header>
+  <ChatView />
 </template>
 
 <style scoped>
-.shell {
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-  max-width: 720px;
-  margin: 3rem auto;
+.bar {
+  max-width: 1080px;
+  margin: 1rem auto 0;
+  padding: 0 1rem;
 }
-.stage {
+.bar h1 {
+  margin: 0;
+  font-size: 1.3rem;
+}
+.mode-line {
+  margin: 0.3rem 0 0;
+  font-size: 0.82rem;
   color: #666;
+}
+.hint {
+  color: #999;
 }
 </style>

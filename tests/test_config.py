@@ -47,16 +47,19 @@ def test_reads_values_from_a_dotenv_file(tmp_path: Path):
 def test_settings_do_not_read_dotenv_on_their_own(repo_root: Path, monkeypatch):
     """`get_settings()` opts into .env; bare `Settings()` must not, or unit tests leak keys."""
     env = repo_root / ".env"
-    created = False
-    if not env.exists():
-        env.write_text("LLM_API_KEY=sk-must-not-leak\n", encoding="utf-8")
-        created = True
+    # Swap the file out instead of assuming a clean checkout: once a real .env exists,
+    # the shell-environment lookup would otherwise find the user's genuine key.
+    backup = env.read_bytes() if env.exists() else None
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    env.write_text("LLM_API_KEY=sk-must-not-leak\n", encoding="utf-8")
     try:
         assert Settings(_env_file=None).llm_api_key == ""
         assert get_settings().llm_api_key == "sk-must-not-leak"
     finally:
-        if created:
+        if backup is None:
             env.unlink()
+        else:
+            env.write_bytes(backup)
         reset_settings_cache()
 
 

@@ -114,6 +114,7 @@
 | 事件 | payload | 触发 |
 |---|---|---|
 | `run_started` | `{run_id, mode, model}` | 任务启动 |
+| `user_message` | `{text}` | 用户原文回显（P7 手验新增：历史还原的用户气泡只能来自持久化事件） |
 | `text_message_content` | `{delta}` | 模型流式 token |
 | `tool_call_start` | `{call_id, tool, risk}` | `ToolCallItem` |
 | `tool_call_args` | `{call_id, delta}` | 参数流式 |
@@ -123,7 +124,7 @@
 | `run_finished` | `{usage, turns}` | 正常结束 |
 | `run_error` | `{kind, message}` | 异常/max_turns/工具失败兜底 |
 
-**所有事件同时落 `events` 表**，SSE 支持 `Last-Event-ID` 断线重放——刷新页面也能完整还原执行轨迹（这是"看得到 Agent 在想什么"的核心体验，不能省）。
+**所有事件同时落 `events` 表**，SSE 支持 `Last-Event-ID` 断线重放——刷新页面也能完整还原执行轨迹（这是"看得到 Agent 在想什么"的核心体验，不能省）。浏览器 `EventSource` 无法自定义请求头，续流游标另走 `?last_event_id=` 查询参数，服务端两条路径等价（T6 有对照测试锁死）。
 
 ## 7. 数据模型
 
@@ -238,6 +239,7 @@ uv run pytest --cov=app                  # 带覆盖率
 uv run ruff check app tests scripts      # lint
 uv run uvicorn app.main:create_app --factory --reload --port 8000   # create_app 是工厂
 MODEL_BACKEND=fake uv run uvicorn app.main:create_app --factory     # 无 key 起服务
+uv run uvicorn scripts.serve:app --reload                           # P6 起：同一工厂的具名入口
 
 # 前端（frontend/，纯 JS，脚手架为手写而非 create-vite）
 NODE_OPTIONS=--use-system-ca npm install # 见下方"本机网络"
@@ -267,7 +269,7 @@ uv run python scripts/ping_model.py
 | 问题 | 决定 |
 |---|---|
 | 两种模式语义 | `full_access` 全自动；`review` = 低风险自动审批 + 高风险人工确认 |
-| 模型 | DeepSeek（`https://api.deepseek.com` / `deepseek-chat`），OpenAI 兼容协议 |
+| 模型 | ~~DeepSeek~~ → **阿里云 DashScope `qwen3.8-flash`**（`https://dashscope.aliyuncs.com/compatible-mode/v1`，OpenAI 兼容协议；2026-10-09 下午改拍板，key 已配入本地 `.env`，已确认该 key 的 `/models` 目录含此模型） |
 | 首批工具 | 5 个内置示例工具，真实脚本 P8 后再挂 |
 | 开工授权 | 直接干 P0+P1 |
 
@@ -275,8 +277,14 @@ uv run python scripts/ping_model.py
 | 阶段 | 状态 | 证据 |
 |---|---|---|
 | P0 脚手架 | **通过** | 43 条后端用例全绿；`frontend` vitest 3 条全绿；`git init` 完成；`.env.example`/`.gitignore` 由测试断言内容 |
-| P1 配置与模型客户端 | **通过（联网门待你跑）** | 同上测试；`uv run ruff check` 干净；覆盖率 TOTAL 94%（`app/model.py`、`app/main.py` 100%）；`MODEL_BACKEND=fake` 起 uvicorn，`GET /healthz` 返回 `{"status":"ok"}` 实测 200 |
-| P2–P8 | 未开工 | — |
+| P1 配置与模型客户端 | **通过（联网门已过，qwen3.8-flash）** | 同上测试；`uv run ruff check` 干净；覆盖率 TOTAL 94%（`app/model.py`、`app/main.py` 100%）；`MODEL_BACKEND=fake` 起 uvicorn，`GET /healthz` 返回 `{"status":"ok"}` 实测 200；2026-10-09 `scripts/ping_model.py` 对 DashScope 实弹通过 |
+| P2 工具层 | **通过** | 全量回归 180 passed / 1 skipped（symlink 用例，本机卷不支持符号链接）；`ruff check` 干净；覆盖率 TOTAL 93%；前端 vitest 3 passed（P0/P1 未破坏）；5 工具 read/write/dangerous 三档齐全，schema 全部 strict（properties==required 有测试锁死） |
+| P3 Agent 核心循环 | **通过（live 用例待你跑）** | T3 共 10 条全绿（`live` 1 条按 `-m live` 才执行）；全量回归 191 passed / 1 skipped；`ruff` 干净；覆盖率 TOTAL 93%（`app/agent/*` 91–100%）；前端 vitest 3 passed |
+| P4 审批与两模式 | **通过** | T2 共 18 条全绿（六格矩阵 6 + 流程/状态 12）；全量回归 209 passed / 1 skipped；`ruff` 干净；覆盖率 TOTAL 93%（`approval.py` 95%、`events.py` 91%）；前端 3 passed |
+| P5 持久化 | **通过** | T4 共 24 条全绿；迁移脚本连跑两次幂等（`scripts/migrate.py` 实跑）；全量回归 232 passed / 1 skipped；`ruff` 干净；覆盖率 TOTAL 93%（`db.py` 100%、`store.py` 94%）；前端 3 passed |
+| P6 FastAPI 后端 | **通过** | T5+T6 共 18 条全绿；全量回归 250 passed / 1 skipped；`ruff` 干净；覆盖率 TOTAL 93%（`runtime.py` 88%）；前端 3 passed；手验门实跑：`uvicorn`（scripted fake 注入）+ curl 走完 会话→消息 202→SSE(id 1..5，止于 approval_required)→审批 202→`Last-Event-ID: 5` 续流(seq 6..18，止于 run_finished)→文件落地→重复审批 409→未知会话 404 |
+| P7 Vue3 前端 | **通过** | vitest 38 passed（7 文件：reducer/SSE 客户端/actions/TracePanel/ApprovalDialog/ChatView/scaffold）；后端契约新增 `user_message` 后全量回归 252 passed / 1 skipped；`ruff` 干净；覆盖率 TOTAL 93%；`vite build` 成功；手验门浏览器实跑：提问→calculator 步骤(4.9ms)→approval_required 弹窗(工具/参数/风险齐全)→批准→run_finished(tokens 78·turns 3)→轨迹折叠/展开可见参数与输出→切 full_access 后二次发送免审批直达 done→删除并重新加载历史会话，用户/助手气泡与两步轨迹完整还原 |
+| P8 端到端整合 | **通过（含真模型 3 任务门，qwen3.8-flash）** | T7 新增 2 条：跨层冒烟（API→SSE→审批→恢复→落库，seq 跨暂停密集无缝、台账与事件一致、文件落地、turns/usage 核对）+ 契约快照（10 类事件一类不多、payload 字段逐类钉死）；后端全量 254 passed / 1 skipped，`ruff` 干净，覆盖率 TOTAL 93%；前端 vitest 42 passed（新增错误边界 3 条 + 模式同步 1 条，均先 RED 后绿）；`vite build` 成功；README 启动三步按生产 wiring 实跑核验；**真模型门 2026-10-09 用 DashScope qwen3.8-flash 跑通**：`ping_model.py` 返回"连接正常"（1 请求 in=67/out=37）、`uv run pytest -m live` 通过、真实 uvicorn 上三任务全过——①review 审批链（7×8→暂停→批准→result.txt=="56"，turns=4）②纯问答不碰工具（涡扇 vs 涡喷）③full_access 工具串联（写 numbers.txt→读回→calculator 求和，答案含 600，turns=3），事件日志存 `data/live_gate/`。**16:27 二次复跑再一次 3/3**（gate1 turns=3、工具链顺序 write→read→calc，与首轮 write→calc→read 略有出入——模型自主决策差异，断言只钉集合不钉顺序，符合契约设计） |
 
 ### P0/P1 实施中的偏差与发现
 1. **FakeModel 落在 `app/testing/` 而非 `tests/`**：`MODEL_BACKEND=fake` 让没 key 的人也能跑起整个后端，替身因此是生产可用代码，必须被测试覆盖（现 93%），不适合藏在测试目录里。
@@ -288,4 +296,73 @@ uv run python scripts/ping_model.py
 
 ### 进入 P2 前需要知道的
 P2 将新建 `app/tools/`（注册表 + 5 个 builtin 工具 + 风险声明），并首次让 `@function_tool` 生成的 schema 进入断言。P1 的联网验收门（`scripts/ping_model.py`）不阻塞 P2，可在你方便时补跑。
+
+### P2 实施中的偏差与发现
+1. **`http_get` 换成 `delete_session_file`**（偏差）：原计划首批工具含 http_get，但它需要网络 mock 才能测，且风险上只是 read 档；换成删除文件后 read/write/dangerous 三档全部有真实样本，P4 审批链路的测试才能当场覆盖 dangerous 档。真实脚本工具按计划 P8 再挂。
+2. **SDK 对参数错误的真实行为（探针实测，非推测）**：缺参/类型错/坏 JSON 统一抛 `ModelBehaviorError("Invalid JSON input for tool X")`，**不含任何参数名**；多余的未知参数被静默忽略、工具照常执行。因此 `describe_failure` 对 `ModelBehaviorError` 分支会回查注册表 schema，把必填参数名（如 `expression`）写进给模型的中文提示里。
+3. **`function_tool` 的关键字参数名是 `failure_error_function`**，不是 `error_function`；SDK 默认失败文案 "An error occurred while running the tool..." 对模型零信息量，已全部替换。
+4. **手工构造 SDK 调用上下文必须用 `ToolContext`**（含 `run_config`），裸 `RunContextWrapper` 会在 `on_invoke_tool` 深处抛 AttributeError——该陷阱已封进 `app/testing/context.py::make_tool_context`。
+5. **strict_mode 默认会把带默认值的参数也放进 required**，故本项目工具一律不设可选参数，测试用 `set(properties)==set(required)` 锁死。
+6. **计算器实测修复**：`ast.parse(..., mode="eval")` 拒绝前导缩进与运算符后的换行，而模型常输出多行排版表达式；实现改为先折叠空白再解析（白名单语言无字符串字面量，折叠安全）。
+7. **每阶段收尾纪律已执行**：P2 完成后做了死代码清理（删 `AppContext.session_id`、`make_tool_context` 的未用参数），并对 P0/P1 全量回归。该规则已记入项目记忆，P3 起每阶段照做。
+
+### P3 实施中的偏差与发现
+1. **流式 runner 不看裸 delta**：`Runner.run_streamed` 只在收到 `response.output_item.done` + 终态 `response.completed` 时才组装回合；FakeModel 原来只发 text/args delta，探针直接触发 "Model did not produce a final response!"。已升级 `_emit` 发完整事件序列（added→delta→done→completed，含 `ResponseUsage` 必填的 total/details 字段）。
+2. **`FakeScriptExhaustedError` 基类改为 SDK `ModelBehaviorError`**（动了 P1 文件，理由）：流式循环把模型侧异常经 `stream_events()` 原样抛出，走 `ModelBehaviorError` 通道；脚本耗尽语义上就是"模型没给出应有的行为"，归一后事件契约的 `run_error.kind=="model"` 对真假模型一致。P1 断言不受影响（`pytest.raises` 仍精确）。
+3. **`Usage` 是裸 dataclass，没有 `model_dump`**（实测 v0.23.1）：事件层的 `_usage_dict` 用 `dataclasses.asdict` 并只保留数值字段。
+4. **SDK 只在参数齐后才发出 `tool_called` run-item**：契约里的 `tool_call_start/end` 背靠背发出；参数增量在此之前以 `tool_call_args` 流式给出。这是转译层的映射决定，已写进 events.py 模块头。
+5. **max_turns 超限是迭代期异常**（`MaxTurnsExceeded`），不是结果状态：`stream_run` 捕获后落成终态 `run_error{kind:"max_turns"}`，绝不向上崩给调用方。
+6. **`stream_run` 暂不接收 `session` 参数**：P4/P6 带测试接入 SQLiteSession 时再加；本轮清理时删掉了这个推测性形参（收尾纪律）。
+7. **工具失败与成功在 SDK 输出里不可区分**（都返回字符串）：`tool_result.ok` 以 `describe_failure` 的固定措辞 "调用失败" 判定，常量集中定义；P4 若引入结构化失败标记再替换。
+
+### P4 实施中的偏差与发现
+1. **`RunState.from_json` 先用纯 JSON 类型校验整棵状态树，`context_override` 要在校验之后才生效**：`AppContext.workspace` 是 `Path`，默认 `to_json()` 产出的 dict 含非 JSON 原生值，恢复时直接失败且异常被 redact 成 "Error details are redacted"（极难诊断，探针实测）。方案：`to_json(context_serializer=...)` 把 Path 转 str；恢复时 `context_override` 传服务端 AppContext（SDK 自动包成 RunContextWrapper）。
+2. **`to_json` 返回 dict 而非字符串；`from_json` 是协程**：审批令牌在 P5 落库时才序列化，`on_state` 回调传递的是 dict。
+3. **`tool_called` 在暂停前就已发出**（SDK 语义 = 模型请求了调用）：暂停流里有 `tool_call_start/end` 但没有 `tool_result`；结果出现在恢复流中。`approval_required` 是暂停流的终态事件。
+4. **always_approve 实测行为**：恢复流含 2 条 `tool_result`（首个被批准的 + 第二个免审的），且不再产生新中断——测试预期按实测修正（一次预期写错，是实现没错）。
+5. **reject 的 `rejection_message` 确实回灌进模型下一回合输入**（`fake.calls` 断言实测通过），拒绝理由可被模型遵守。
+6. **无决策的中断默认拒绝**（`decisions` 缺失该 approval_id → reject + 默认理由）：用户沉默不等于同意。
+7. **审批策略经 `dataclasses.replace` 克隆到工具实例**：注册表共享实例绝不被改写，同一进程可并存不同模式的 run；`should_pause` 是纯函数，六格矩阵逐格断言。
+
+### P5 实施中的偏差与发现
+1. **连接以 `isolation_level=None`（autocommit）打开，事务全部显式 `BEGIN IMMEDIATE`**：Python 默认的延迟事务会让"SELECT MAX(seq)+1 再 INSERT"在并发下交错；IMMEDIATE 直接拿写锁串行化，`UNIQUE(session_id, seq)` 兜底。4 线程×10 事件实测 seq=1..40 无撞无死锁（busy_timeout=5000）。
+2. **seq 语义按计划微调**：会话内单调密集（断线重放游标所需），跨 run 也共享（同一会话的多个 run 连续编号）——§7 只要求"每会话单调"，实现取密集无缺口最强保证。
+3. **`finish_run` 与 `transition_run` 共用同一跃迁校验**：便利路径不得绕过状态机（非法跃迁测试对两条路径都断言）。
+4. **状态字符串先校验成员再校验边**：`transition_run("未知状态")` 报"未知的 run 状态"，避免脏字符串进库（清理轮补的测试）。
+5. **JSON 一律 `ensure_ascii=False` 落库**：中文 payload 在 sqlite 工具里直读；时间戳统一 UTC ISO 毫秒。
+6. **审批决定不可翻转**：`decide_approval` 对非 pending 记录报 `InvalidTransitionError`（重复点击/重放防护留给 P6 层复用）。
+
+### P6 实施中的偏差与发现
+1. **取消的终态必须由取消方同步写，不能指望被取消协程自己收尾**（实测踩坑）：纯内存 await（ASGITransport、busy loop）可能让 pump 任务从未被调度，对未启动任务 `cancel()` 不执行任何函数体——包括 except 分支。`cancel_run`/`shutdown` 现在先同步落 `cancelled` 状态 + `run_error{kind:"cancelled"}` 事件，再 cancel 任务；`_finish_cancelled` 幂等，pump 后醒来自我跳过。
+2. **`run_error.kind` 契约扩展**：新增 `cancelled`（取消）与 setup 失败时的 `internal`（agent 工厂炸，如缺 key）；`openai.APIError`（真实 5xx 通道）归入既有 `model` kind。§6 的 kind 集合以代码为准：max_turns | model | internal | cancelled。
+3. **SSE 端点 = events 表的"重放 + 跟读"**：先订阅内存队列再读库（先读后订会丢交错事件）；载荷始终从库里取，队列只送"醒了"信号；`run_finished/run_error/approval_required` 三种事件关闭流——审批暂停后前端断开、决定后带 `Last-Event-ID` 重连，正好复用同一契约。
+4. **恢复暂停 run 需要"同一个 Agent 对象"的深层原因**：`RunState.from_json` 校验依赖工具集合，且 FakeModel 的脚本位置存在实例上——Runtime 因此把暂停时的 agent 存进 `_paused_agents`，跨请求复用；进程重启则回退工厂重建（工具与审批策略由 mode 唯一决定，成立）。
+5. **SQLiteSession 用独立文件 `data/sdk_memory.db`**（偏差，§7 未指明文件名）：与轨迹库同文件时 SDK 的惰性事务会和 `BEGIN IMMEDIATE` 写者抢锁；`sdk_*` 表依旧"不碰不迁移"。
+6. **`create_app()` 不再要求开机有 API key**（改了 P0/P1 行为，理由充分）：默认工厂把 `build_model` 推迟到首个 run 的 setup 阶段，配置错误以 run_error 事件呈现（含修复指引），/healthz 与会话 CRUD 照常可用——server 可先起、后补 key。P0 两条脚手架测试同步改为自带 Settings（fake 后端 + 临时数据目录），顺带修掉了它们读开发者真实 `.env` 的旧隐患。
+7. **手验门的 scripted 注入**：默认 fake 无脚本、不会暂停，手验审批流时以临时 launcher 注入 `FakeModel([tool_call, text])` 工厂（与测试同一 seam），uvicorn 真进程 + curl 全链路通过，见进度门 P6 行。
+8. **`scripts/migrate.py` 默认库路径改为 `get_settings().database_path`**（清理轮发现）：P5 写死的 `data/trace.db` 与 P6 实际挂载的 `small_dify.db` 会分裂成两个库；现在 CLI 与应用读同一配置源。
+9. **raw-ASGI 测试泵必须声明 `spec_version: "2.4"`**：2.3 会触发 starlette 旧版 disconnect 任务组，对永不挂起的 `receive()` 忙轮询、饿死事件循环（第一次跑 T6 直接整机冻住 20 秒才现形）。
+10. 每阶段收尾纪律执行：T5/T6 完成后清理了测试脚手架里的占位垃圾（`with pytest.suppress`、`_noop`、死断言），并全量回归 P0–P5（250 条无破坏）。
+
+### P7 实施中的偏差与发现
+1. **手验门抓到契约级真 bug：持久化事件里没有用户原文**。live 时用户气泡是前端 send() 本地推的，历史 `?format=json` 还原时缺 `user_message` 事件 → 重载后只剩助手气泡。按测试先行修复：后端 2 条 RED（T3 skeleton + T6 replay）→ `stream_run` 在 `run_started` 后回显 `user_message{text}` → 前端 EVENT_TYPES 与 reducer 同步。§6 契约表现为 10 类事件。
+2. **EventSource 不能带自定义请求头**：续流游标另走 `?last_event_id=`（后端 header/query 等价路径 P6 已有对照测试），前端只用查询参数一条路。
+3. **`approval_required` = 本轮连接终点**：弹窗"决定→POST→带游标重连"复用与断线重放完全相同的机制，没有第二条代码路径。
+4. **store 是唯一 reducer**：`tool_call_args` 增量可能先于 `tool_call_start` 到达（SDK 先发参数流），按 call_id 缓冲进 `argsBuffer`，start 落地时合并——reducer 测试专门锁死这个乱序。
+5. **EventSource 句柄不放 pinia state**（模块级私有）：把活的套接字对象塞进响应式状态只会招 Proxy 意外；单人应用同时只有一条活跃流。
+6. **user_message 去重**：live 路径 send() 先本地推气泡、事件随后到达，reducer 按"最后一条同文本 user 消息"去重；历史重放（本地无推入）照常还原。
+7. **测试自身两枚陷阱**：同一个 pinia 里 `useAgentStore()` 返回同一实例——"fresh 应为 idle"必须先 `setActivePinia(createPinia())`；jsdom 里点击按钮不触发表单隐式提交，发送按钮改为 `type=button + @click`。
+8. **手验 launcher 复用固定 SCRIPT 会使两次运行共享 call_id**，store 的 ensureStep 按 id 合并步骤——launcher 产物而非前端缺陷（真实模型每次 call_id 唯一）。记录在案防误报。
+9. **vite `/api` 代理必须 `rewrite` 剥前缀**（后端路由挂在根上）；本机 vite 7 只绑 `[::1]`，用 127.0.0.1 探它会 ECONNREFUSED，手验与文档统一 `http://localhost:5173`。
+10. **markstream-vue 2.0.16**：直接使用组件是命名导出 `MarkdownRender`（props `content`/`final`），流式期间 `final=false`；生产构建有 >500kB chunk 警告（含代码高亮/图表异步块），本地单人应用接受，不做手工分包。
+11. 收尾纪律执行：删除 client.js 中未被任何调用方使用的 `getRun`/`listApprovals` 占名接口；清掉 P5 遗留的死库 `data/trace.db`；回归 252 + 38 全绿后才勾选手验门。
+
+### P8 实施中的偏差与发现
+1. **T7 集成冒烟一次转绿**：P0–P7 的分层测试没有掩盖跨层缺口（seq 跨暂停无缝、审批台账与事件一致、恢复段游标衔接在 T5/T6/T7 三处独立成立）。契约快照测试的价值在"钉死"而非"抓到"——10 类事件、每类 payload 字段集合逐一对表 §6，未来漂移会先在这里红。
+2. **错误边界收进 store action（先 RED 3 条）**：`decide` 409、`send` 500、`cancel` 竞态若以 rejection 冒泡，Vue 组件层就是未处理 Promise。现在 `send/decide` 失败落 `status='error'+store.error`（弹窗因暂停已失效而关闭），`cancel` 失败**只报不改状态**——取消没成功时流还活着，状态机不许撒谎。ChatView 里重复的 try/catch 随之删除。
+3. **模式开关与所加载会话对齐**（契约微调，先 RED）：`sessionMode` 的权威来源从"事件里的历史 run_started / 侧栏行"改为 `GET /sessions/{id}` 的当前行——开关反映的是"下一条消息会怎样"，重载会话后必须与服务端一致。为此在 client.js 恢复了 `getSession`（P7 清理时因无调用方删掉，现在有真实调用方，清理决定没有被推翻）。
+4. **README 的启动三步按生产 wiring 实跑核验**（`scripts.serve:app` + `MODEL_BACKEND=fake` + curl 全流程），不是照抄命令约定；`.env.example` 的 `DATA_DIR` 注释补上双库布局说明。
+5. **真模型门（§10 P8 的最后一格）不在我手里**：`-m live`、`ping_model.py` 和"3 个真实任务留日志"需要你的 DeepSeek key。fake 侧的等价证据链已完整（同一 SDK 通道、同一事件契约、T3 的 live 用例与 fake 用例断言同一组事实）。
+6. 收尾纪律执行：ruff 抓到 T7 初稿的未用变量与 import 排序并清零；三台验证用的后台服务（8000/8011/5173）全部关停、临时脚本与临时数据目录删除；`git status` 全清单核对无游离文件。P2–P8 尚未提交，等你发话。
+
 

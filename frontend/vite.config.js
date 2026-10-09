@@ -7,8 +7,13 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      // Backend (uvicorn) owns /api; SSE goes through here too.
-      '/api': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+      // Backend routes live at the root (/sessions, /runs, /healthz); the dev
+      // proxy owns the /api prefix and strips it before forwarding. SSE too.
+      '/api': {
+        target: 'http://127.0.0.1:8000',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api/, ''),
+      },
     },
   },
   test: {

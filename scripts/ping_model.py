@@ -11,6 +11,8 @@ from __future__ import annotations
 import asyncio
 import sys
 
+sys.path.insert(0, ".")
+
 from agents import Agent, Runner
 from app.config import ConfigError, get_settings
 from app.model import build_model
@@ -34,8 +36,13 @@ async def main() -> int:
     )
     result = await Runner.run(agent, input="ping", max_turns=1)
     print(f"\nreply: {result.final_output}")
-    usage = result.usage
-    print(f"usage: requests={usage.requests} in={usage.input_tokens} out={usage.output_tokens}")
+    # v0.23.1 fact: RunResult has no `.usage`; per-request Usage lives on raw_responses
+    total = {"requests": 0, "input": 0, "output": 0}
+    for resp in result.raw_responses:
+        total["requests"] += 1
+        total["input"] += resp.usage.input_tokens
+        total["output"] += resp.usage.output_tokens
+    print(f"usage: {total}")
     return 0
 
 

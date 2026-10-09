@@ -13,7 +13,18 @@ import httpx
 import pytest
 from app.main import create_app
 
-REQUIRED_DIRS = ["app", "app/testing", "tests", "scripts", "docs", "frontend/src"]
+REQUIRED_DIRS = [
+    "app",
+    "app/testing",
+    "app/agent",
+    "app/tools",
+    "app/tools/builtin",
+    "app/tools/impl",
+    "tests",
+    "scripts",
+    "docs",
+    "frontend/src",
+]
 
 
 @pytest.mark.parametrize("rel", REQUIRED_DIRS)
@@ -62,8 +73,13 @@ def test_frontend_is_a_vite_vue3_js_project_with_vitest(repo_root: Path):
     assert "typescript" not in deps, "frontend was agreed to be JS, not TS"
 
 
-async def test_healthz_endpoint_answers_200():
-    app = create_app()
+async def test_healthz_endpoint_answers_200(tmp_path: Path):
+    # Since P6, create_app wires the Runtime (trace store + agent factory): the app
+    # must still boot with nothing but settings — fake backend, throwaway data dir.
+    from app.config import Settings
+
+    settings = Settings(_env_file=None, model_backend="fake", data_dir=tmp_path / "data")
+    app = create_app(settings)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get("/healthz")
@@ -71,5 +87,10 @@ async def test_healthz_endpoint_answers_200():
     assert response.json() == {"status": "ok"}
 
 
-def test_create_app_is_a_factory_not_a_module_singleton():
-    assert create_app() is not create_app(), "each call returns a fresh app (needed for test isolation)"
+def test_create_app_is_a_factory_not_a_module_singleton(tmp_path: Path):
+    from app.config import Settings
+
+    settings = Settings(_env_file=None, model_backend="fake", data_dir=tmp_path / "data")
+    assert create_app(settings) is not create_app(settings), (
+        "each call returns a fresh app (needed for test isolation)"
+    )

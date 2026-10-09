@@ -1,0 +1,7 @@
+# Runtime dependencies (versions pinned by the 2026-10-09 full green run).
+# Alternative to `uv sync` (pyproject.toml + uv.lock are the primary source of truth).
+openai-agents==0.23.1
+fastapi==0.143.0
+uvicorn[standard]==0.54.0
+pydantic-settings==2.15.0
+httpx==0.28.1

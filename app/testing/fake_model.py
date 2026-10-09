@@ -22,19 +22,24 @@ from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from agents.exceptions import ModelBehaviorError
 from agents.items import ModelResponse
 from agents.model_settings import ModelSettings
 from agents.models.interface import Model, ModelTracing
 from agents.usage import Usage
 from openai.types.responses import (
+    Response,
+    ResponseCompletedEvent,
     ResponseFunctionCallArgumentsDeltaEvent,
     ResponseFunctionToolCall,
+    ResponseOutputItemAddedEvent,
+    ResponseOutputItemDoneEvent,
     ResponseOutputMessage,
     ResponseTextDeltaEvent,
+    ResponseUsage,
 )
 from openai.types.responses.response_output_text import ResponseOutputText
-
-from app.config import Settings
+from openai.types.responses.response_usage import InputTokensDetails, OutputTokensDetails
 
 _counter = itertools.count(1)
 
@@ -76,15 +81,6 @@ def tool_call_reply(name: str, arguments: dict[str, Any] | None = None) -> Model
     )
 
 
-def multi_tool_call_reply(*calls: tuple[str, dict[str, Any]]) -> ModelResponse:
-    """A scripted turn asking for several tools in one response (parallel calling)."""
-    return ModelResponse(
-        output=[tool_call_reply(name, args).output[0] for name, args in calls],
-        usage=Usage(requests=1, input_tokens=10, output_tokens=5),
-        response_id=None,
-    )
-
-
 @dataclass
 class RecordedCall:
     """What the SDK actually passed to the model on one turn."""
@@ -96,8 +92,14 @@ class RecordedCall:
     all_tools: list[str] = field(default_factory=list)
 
 
-class FakeScriptExhaustedError(RuntimeError):
-    """Raised when the script has no more turns but the agent keeps calling the model."""
+class FakeScriptExhaustedError(ModelBehaviorError):
+    """Raised when the script has no more turns but the agent keeps calling the model.
+
+    Subclasses the SDK's `ModelBehaviorError` deliberately: the streaming runner ships
+    model-side failures out of `stream_events()` through that channel, so a "fake model
+    ran out of answers" surfaces as exactly the same *kind* of failure a real provider
+    timeout or malformed response would — which is what the event contract asserts.
+    """
 
 
 class FakeModel(Model):
@@ -168,9 +170,22 @@ class FakeModel(Model):
         return text_reply(self._default_reply)
 
     async def _emit(self, response: ModelResponse):
-        """Turn a scripted response into OpenAI-style stream deltas."""
+        """Turn a scripted response into OpenAI-Responses-style stream events.
+
+        The streaming runner ignores bare deltas: it only assembles a turn once it has
+        seen `response.output_item.done` events and a terminal `response.completed`.
+        (P3 probe learned this the hard way: delta-only emission dies with
+        "Model did not produce a final response!".)
+        """
         sequence = 0
         for output_index, item in enumerate(response.output):
+            sequence += 1
+            yield ResponseOutputItemAddedEvent(
+                type="response.output_item.added",
+                output_index=output_index,
+                item=item,
+                sequence_number=sequence,
+            )
             if item.type == "message":
                 for block in item.content:
                     for char in block.text:
@@ -189,12 +204,44 @@ class FakeModel(Model):
                 yield ResponseFunctionCallArgumentsDeltaEvent(
                     type="response.function_call_arguments.delta",
                     delta=item.arguments,
-                    item_id=getattr(item, "id", None) or f"fc_fake_{output_index}",
+                    item_id=item.call_id,
                     output_index=output_index,
                     sequence_number=sequence,
                 )
+            sequence += 1
+            yield ResponseOutputItemDoneEvent(
+                type="response.output_item.done",
+                output_index=output_index,
+                item=item,
+                sequence_number=sequence,
+            )
 
-
-def build_fake_model(settings: Settings | None = None) -> FakeModel:
-    """Entry point used when `MODEL_BACKEND=fake`: run the app without any API key."""
-    return FakeModel()
+        sequence += 1
+        yield ResponseCompletedEvent(
+            type="response.completed",
+            response=Response(
+                id=response.response_id or f"resp_fake_{next(_counter)}",
+                model="fake",
+                object="response",
+                created_at=0,
+                output=list(response.output),
+                parallel_tool_calls=True,
+                tool_choice="auto",
+                tools=[],
+                status="completed",
+                usage=ResponseUsage(
+                    input_tokens=response.usage.input_tokens if response.usage else 0,
+                    output_tokens=response.usage.output_tokens if response.usage else 0,
+                    total_tokens=(
+                        (response.usage.input_tokens + response.usage.output_tokens)
+                        if response.usage
+                        else 0
+                    ),
+                    # All three detail fields are required by the openai type models;
+                    # the fake reports zeros because it simulates no caching/reasoning.
+                    input_tokens_details=InputTokensDetails(cache_write_tokens=0, cached_tokens=0),
+                    output_tokens_details=OutputTokensDetails(reasoning_tokens=0),
+                ),
+            ),
+            sequence_number=sequence,
+        )

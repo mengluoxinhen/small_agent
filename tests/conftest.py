@@ -8,9 +8,14 @@ leak into a unit test.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
+
+# Tools are invoked directly in unit tests, where there is no trace/span around them.
+# Disabling tracing keeps that output out of the test report.
+os.environ.setdefault("OPENAI_AGENTS_DISABLE_TRACING", "1")
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
