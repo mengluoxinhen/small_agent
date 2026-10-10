@@ -4,6 +4,16 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>small_dify Agent</title>
+  <script>
+    // pre-paint theme: avoids the white flash when a dark preference is stored
+    try {
+      const t = localStorage.getItem('ui.theme') || 'system'
+      const dark = t === 'dark' || (t === 'system' && matchMedia('(prefers-color-scheme: dark)').matches)
+      document.documentElement.dataset.theme = dark ? 'dark' : 'light'
+    } catch (e) {
+      /* storage blocked: stay light */
+    }
+  </script>
   </head>
   <body>
     <div id="app"></div>

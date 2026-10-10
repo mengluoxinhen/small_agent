@@ -44,7 +44,9 @@ describe('TracePanel', () => {
     const wrapper = mountPanel([OK_STEP])
     expect(wrapper.text()).not.toContain('6*7')
     await wrapper.find('[data-testid="trace-step"]').trigger('click')
-    expect(wrapper.text()).toContain('{"expression":"6*7"}')
+    // V5: args are pretty-printed JSON when parseable (keys/values survive)
+    expect(wrapper.text()).toContain('"expression"')
+    expect(wrapper.text()).toContain('6*7')
     expect(wrapper.text()).toContain('42')
     await wrapper.find('[data-testid="trace-step"]').trigger('click')
     expect(wrapper.text()).not.toContain('6*7')
@@ -72,6 +74,16 @@ describe('TracePanel', () => {
     ])
     const statuses = wrapper.findAll('[data-testid="trace-step"]').map((n) => n.attributes('data-status'))
     expect(statuses).toEqual(['pending', 'running', 'success', 'error'])
+  })
+
+  it('V5: each step carries a status-icon SVG and the running card gets the flow class', () => {
+    const wrapper = mountPanel([PENDING_STEP, OK_STEP])
+    const steps = wrapper.findAll('[data-testid="trace-step"]')
+    expect(steps[0].attributes('data-status')).toBe('running')
+    expect(steps[0].classes()).toContain('status-running') // 流光边框挂在类上
+    expect(steps[0].find('svg').exists()).toBe(true)
+    expect(steps[1].classes()).toContain('status-success')
+    expect(steps[1].find('svg').exists()).toBe(true)
   })
 
   it('U3: an empty trace can suppress the default title (embedded mode)', () => {

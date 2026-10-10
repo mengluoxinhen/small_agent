@@ -312,3 +312,33 @@ describe('agent store — session management (U3)', () => {
     expect(store.status).toBe('streaming')
   })
 })
+
+// ---------------------------------------------------------------- V 系列增量
+
+describe('agent store — session list (V)', () => {
+  it('ensureSessions fetches the list once and remembers it loaded', async () => {
+    const calls = routeFetch(({ method, url }) => {
+      if (method === 'GET' && url === '/api/sessions') return [{ id: 's1', title: 't' }]
+      throw new Error(`unexpected call ${method} ${url}`)
+    })
+    const store = useAgentStore()
+    expect(store.sessionsLoaded).toBe(false)
+    await store.ensureSessions()
+    await store.ensureSessions()
+    expect(calls.filter((c) => c.method === 'GET')).toHaveLength(1)
+    expect(store.sessionsLoaded).toBe(true)
+    expect(store.sessions).toEqual([{ id: 's1', title: 't' }])
+  })
+
+  it('send() inserts the brand-new session optimistically, with no extra GET', async () => {
+    const calls = routeFetch(({ method, url }) => {
+      if (method === 'POST' && url === '/api/sessions') return NEW_SESSION
+      if (method === 'POST' && url === '/api/sessions/s1/messages') return { run_id: 'r1' }
+      throw new Error(`unexpected call ${method} ${url}`)
+    })
+    const store = useAgentStore()
+    await store.send('算一下 6*7')
+    expect(store.sessions[0]).toMatchObject({ id: 's1', title: 't', pinned: false })
+    expect(calls.some((c) => c.method === 'GET')).toBe(false) // 乐观插入，不等服务器回表
+  })
+})

@@ -31,6 +31,7 @@ export const useAgentStore = defineStore('agent', {
     lastEventId: 0,
     runAnchor: 0, // messages.length when the current run started; bubbles at/after it belong to this run
     sessions: [],
+    sessionsLoaded: false, // V3: drives the sidebar skeleton (first load only)
     attachments: [], // [{filename, bytes}] uploaded into the current session workspace
   }),
   actions: {
@@ -181,6 +182,13 @@ export const useAgentStore = defineStore('agent', {
 
     async refreshSessions() {
       this.sessions = await api.listSessions()
+      this.sessionsLoaded = true
+    },
+
+    /** V4: the shell may boot sidebar + chat together; the list is fetched once. */
+    async ensureSessions() {
+      if (this.sessionsLoaded) return
+      await this.refreshSessions()
     },
 
     async loadSession(sessionId) {
@@ -252,6 +260,16 @@ export const useAgentStore = defineStore('agent', {
           const session = await api.createSession({ title: text.slice(0, 24), mode: ui.mode })
           this.sessionId = session.id
           this.sessionMode = session.mode
+          // V3 optimistic row: the sidebar shows the chat immediately instead of
+          // waiting for a list round-trip (ChatView still refreshes after send).
+          const row = {
+            id: session.id,
+            title: session.title ?? text.slice(0, 24),
+            mode: session.mode ?? ui.mode,
+            pinned: false,
+            updated_at: new Date().toISOString(),
+          }
+          this.sessions = [row, ...this.sessions.filter((s) => s.id !== row.id)]
         } else if (this.sessionMode !== ui.mode) {
           // the mode toggle only takes effect for the NEXT message: patch, then send
           const patched = await api.patchSession(this.sessionId, { mode: ui.mode })

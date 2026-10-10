@@ -1,0 +1,269 @@
+/**
+ * V1 design system — the single source of truth for colors, radii, shadows,
+ * typography and motion. Components never hardcode hex values: they consume
+ * these tokens, so the light/dark switch is exactly "flip data-theme" with no
+ * white flash (both schemes live in the same paint pass).
+ *
+ * Dark is an attribute override on <html>, applied synchronously by the ui
+ * store (stores/ui.js) before first paint from main.js.
+ */
+
+:root {
+  color-scheme: light;
+
+  /* surfaces */
+  --bg-left: #f9fafb;
+  --bg-right: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #f4f5f7;
+  --surface-3: #eceef2;
+
+  /* text */
+  --text-1: #111827;
+  --text-2: #374151;
+  --text-3: #6b7280;
+
+  /* lines */
+  --divider: rgba(0, 0, 0, 0.06);
+  --border-soft: rgba(0, 0, 0, 0.09);
+
+  /* brand */
+  --primary: #4d6bfe;
+  --primary-2: #7c5cff;
+  --gradient: linear-gradient(135deg, #4d6bfe, #7c5cff);
+  --tint: rgba(77, 107, 254, 0.08);
+  --tint-strong: rgba(77, 107, 254, 0.16);
+
+  /* status */
+  --success: #10b981;
+  --info: #3b82f6;
+  --danger: #ef4444;
+  --warn: #f59e0b;
+
+  /* glassmorphism */
+  --glass-bg: rgba(255, 255, 255, 0.72);
+  --glass-blur: saturate(1.4) blur(12px);
+
+  /* elevation: soft, layered */
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.05);
+  --shadow-md: 0 4px 14px rgba(16, 24, 40, 0.07), 0 1px 3px rgba(16, 24, 40, 0.05);
+  --shadow-lg: 0 16px 40px rgba(16, 24, 40, 0.12), 0 2px 8px rgba(16, 24, 40, 0.06);
+
+  /* geometry & motion */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-pill: 999px;
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --dur-fast: 150ms;
+  --dur: 200ms;
+  --dur-slow: 250ms;
+
+  /* type */
+  --font:
+    'Inter', system-ui, -apple-system, 'Segoe UI', 'PingFang SC',
+    'HarmonyOS Sans SC', 'Microsoft YaHei', sans-serif;
+}
+
+html[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg-left: #171717;
+  --bg-right: #212121;
+  --surface: #212121;
+  --surface-2: #262626;
+  --surface-3: #2f2f2f;
+
+  --text-1: #f3f4f6;
+  --text-2: #d1d5db;
+  --text-3: #9ca3af;
+
+  --divider: rgba(255, 255, 255, 0.08);
+  --border-soft: rgba(255, 255, 255, 0.12);
+
+  --tint: rgba(124, 92, 255, 0.14);
+  --tint-strong: rgba(124, 92, 255, 0.26);
+
+  --glass-bg: rgba(33, 33, 33, 0.78);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.45), 0 1px 3px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+/* ------------------------------------------------------------------ base */
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--text-1);
+  background: var(--bg-right);
+  transition: background-color var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+
+button {
+  font-family: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+::selection {
+  background: var(--tint-strong);
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--surface-3);
+  border-radius: var(--radius-pill);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-3);
+}
+
+/* ---------------------------------------------------------------- shared */
+
+.glass {
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur, saturate(1.4) blur(12px));
+  -webkit-backdrop-filter: var(--glass-blur, saturate(1.4) blur(12px));
+}
+
+.meta {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+/* ------------------------------------------------------------- keyframes */
+
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.4;
+    transform: scale(0.75);
+  }
+}
+
+@keyframes blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+@keyframes typing-bounce {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+  30% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* flowing gradient border for a running tool card / hovered primary CTA */
+@keyframes border-flow {
+  0% {
+    background-position: 0% 50%;
+  }
+  100% {
+    background-position: 200% 50%;
+  }
+}
+
+@keyframes stop-ring {
+  0% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.45);
+  }
+  100% {
+    box-shadow: 0 0 0 10px rgba(239, 68, 68, 0);
+  }
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.94) translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes skeleton-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.msg-enter {
+  animation: fade-up var(--dur-slow) var(--ease);
+}
+
+/* ---------------------------------------------------------------- motion */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -384,6 +384,27 @@ P2 将新建 `app/tools/`（注册表 + 5 个 builtin 工具 + 风险声明）�
 7. **手验抓到一处 RED 期望自错**（非实现 bug）：pin 翻转用例把"已置顶行"的期望写成 pin=true；以 fixture 语义修正为 unpin 方向，并保留"翻转值原样下发"断言。
 8. 收尾纪律执行：删除临时演示 `scripts/_ui_demo.py`、充值后复跑用的临时真模型门驱动 `scripts/_live_gate_scratch.py`，以及 `data_ui_check/`、`data_ui_live/`、`data/live_gate_run/`；`scripts/__pycache__` 残留清除；`git status` 核对——改动只落 U 系列相关文件。**U2–U4 已于 2026-10-10 提交 `f00e07d` 并推送 master（远端 API 核验：head 一致、`.env` 仍 404）**。
 
+### V 系列：商业级界面精修（2026-10-10，需求=资深前端+产品设计师一次性自主交付，禁止中途确认）
+
+| 阶段 | 状态 | 证据 |
+|---|---|---|
+| V1 设计系统 | **通过** | 新增 `styles/theme.css`：全部规格令牌（亮 #F9FAFB/#FFF，暗 #171717/#212121，渐变 135deg #4D6BFE→#7C5CFF，四状态色，玻璃拟态、12–16px 圆角、Inter/PingFang SC 15px/1.7、meta 12px #6B7280）、9 组 keyframes、`.msg-enter`、prefers-reduced-motion 总开关；`index.html` 预渲染内联脚本按 localStorage 定 `data-theme` 防白闪；`main.js` 挂载前 `applyTheme()+watchSystemTheme()` |
+| V2 布局外壳 | **通过** | `App.vue` grid 双栏（100dvh、overflow-hidden）：拖拽手柄 pointer 事件（240–360 clamp+持久化）、折叠 44px 轨道、<768px 覆盖抽屉（scrim 模糊、左滑关闭）；0 视口 webview 内实测桌面态：拖 280→320 生效、localStorage 同步、列模板 `320px 5px 0px`、折叠 `44px 0px` |
+| V3 侧栏精修 | **通过** | 分组（置顶/今天/昨天/7 天内/更早，本地日界）、搜索 `<mark>` 高亮、首字母恒定色相头像、行 ⋯ 菜单（重命名/置顶/复制链接/删除）、删除走 `ConfirmDialog` 弹层（禁 window.confirm，测试锁死 spy 未调用）、骨架屏、底部设置/主题/头像；修复 Vue scoped `v-bind` 模板串编译出畸形自定义属性的缺陷（列宽改由 App grid 决定，组件 `width:100%`） |
+| V4 聊天区精修 | **通过** | 玻璃吸顶头栏（内联改标题、状态胶囊呼吸点、分享/导出/清空、模式段）、用户气泡右 70%/AI 头像+气泡、悬停操作条（复制/赞/踩/重新生成）、typing 三点+流式光标、自动增高玻璃输入区（≤6 行）、发送↔停止（红脉冲环）、Enter/Shift+Enter、空态 4 快捷卡、`/chat/:sid` 路径路由（兼容旧 `?sid=`）、无 id 自动选最近会话、错误卡+重试；浏览器实测：发送→calculator 步骤卡（success/耗时/pretty 参数结果）、审批弹窗→批准→恢复、导出 toast、空态快捷卡只填充 |
+| V5 步骤卡重做 | **通过** | TracePanel：lucide 状态图标（pending 圈/running 自旋/success 勾/error 叉，显式 class 不依赖 `.lucide`）、垂直时间线连接线、running 流光渐变边框、展开 pretty JSON；折叠交互契约不变 |
+| V6 全局反馈+自检 | **通过** | toast store+ToastHost（右上、自动消失、kind 色）、Skeleton、错误重试；全量回归：**vitest 110/110、vite build ✓、后端 261 passed/1 skipped、ruff 干净**；浏览器自检（fake 后端 scripted seam）：深色令牌单帧翻转、刷新 `/chat/:sid` 恢复 4 条消息、重命名→行+标题同步、置顶→分组迁移、搜索命中/空/还原、删除弹层取消、模式段切换持久化 |
+
+### V 系列实施中的偏差与发现
+1. **不引 Tailwind/vue-router**：规格令牌全部落 CSS 变量 + scoped style；"路由"用 replaceState + path 解析自研数十行，依赖面零增长（构建仅原有 markstream >500kB 警告）。
+2. **图标全部 lucide-vue-next（1.75 描边意图靠显式 class），零 emoji**；lucide v1 不保证自动 `.lucide` class，所有状态类显式绑定。
+3. **"思考过程"无后端事件**：以"执行过程"可折叠步骤列表（虚线左轨）代替，诚实降级不造假数据。
+4. **赞/踩仅本地态**（后端无反馈字段，UI 保留 toggle）；"清空"是视图清空（startNewSession），历史仍在库。
+5. **隐藏 webview 视口 0×0**：matchMedia 强制 mobile 假象、rAF 停摆导致 CSS transition 停在起始值——深色"未变色"实为检查环境假象（令牌与 fresh 渲染均正确）；桌面态验证通过直接翻转 App 的 `isMobile` 完成。
+6. **Vue scoped `v-bind("`…${}…`")` 模板串是编译器陷阱**：生成畸形自定义属性名并静默失效，必须用简单表达式或由外层 grid 控制宽度。
+7. 收尾纪律：删除 `scripts/_v_demo.py`、`data_v_check/`，8000/5173 端口清空（含一枚 vite 残留进程）；需求变更引发死代码审计：动画/工具类/符号/lucide 导入逐一扫过均有引用，前期已清 Loader 冗余导入、`--glass-border` 死令牌、`<Pin :size="0">` 占位、App 空全局 style 块、▸/✓ 字形→lucide。
+
+
 
 
 

@@ -6,9 +6,11 @@ import { useUiStore } from '../stores/ui'
 import SessionSidebar from '../components/SessionSidebar.vue'
 
 /**
- * U3 left column: search box, grouped session list with per-row pin/rename/delete,
- * new-session button, collapse control, and a bottom settings area.
- * Everything talking to the server is spied at the store-action level.
+ * V3 left column: grouped sessions with a per-row overflow menu
+ * (rename / pin / copy link / delete), a Popconfirm for deletion
+ * (window.confirm is banned), a theme toggle in the footer, and skeleton
+ * rows while the list loads for the first time.
+ * Network-backed store actions are spied at the action level.
  */
 
 function row(id, extra = {}) {
@@ -20,14 +22,25 @@ function mountBar() {
   return mount(SessionSidebar)
 }
 
+function rowOf(w, id) {
+  return w.findAll('.session-row').find((n) => n.text().includes(id))
+}
+
+async function openMenu(w, id) {
+  const r = rowOf(w, id)
+  await r.find('[data-testid="menu-button"]').trigger('click')
+}
+
 beforeEach(() => {
   setActivePinia(createPinia())
   store = useAgentStore()
   store.sessions = [row('s1'), row('s2'), row('p0', { pinned: true })]
   store.sessionId = 's1'
+  store.sessionsLoaded = true // structural tests skip the first-load skeleton
+  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => [] })))
 })
 
-describe('SessionSidebar', () => {
+describe('SessionSidebar (V3)', () => {
   it('renders grouped rows with the active session highlighted', () => {
     const w = mountBar()
     expect(w.find('[data-testid="group-置顶"]').exists()).toBe(true)
@@ -45,26 +58,35 @@ describe('SessionSidebar', () => {
     expect(titles[0]).toContain('beta')
   })
 
-  it('new-session button starts a fresh session and collapses search', async () => {
+  it('new-session button starts a fresh session', async () => {
     const spy = vi.spyOn(store, 'startNewSession')
     const w = mountBar()
     await w.get('[data-testid="new-session"]').trigger('click')
     expect(spy).toHaveBeenCalled()
   })
 
-  it('pin toggle patches the session with the flipped value', async () => {
-    const spy = vi.spyOn(store, 'togglePin').mockImplementation(async () => {})
+  it('the overflow menu opens per row and only one menu exists at a time', async () => {
     const w = mountBar()
-    const p0 = w.findAll('.session-row').find((n) => n.text().includes('p0'))
-    await p0.find('[data-testid="pin-button"]').trigger('click')
-    expect(spy).toHaveBeenCalledWith('p0', false) // p0 已置顶 -> 点击取消置顶（翻转值原样下发）
+    expect(w.find('[data-testid="menu-pin"]').exists()).toBe(false)
+    await openMenu(w, 's2')
+    expect(w.findAll('[data-testid="menu-rename"]')).toHaveLength(1)
+    await openMenu(w, 's1')
+    expect(w.findAll('[data-testid="menu-rename"]')).toHaveLength(1) // 上一个菜单被顶掉
   })
 
-  it('rename: the pencil opens an inline editor; confirming PATCHes the title', async () => {
+  it('pin toggle lives behind the menu and patches the flipped value', async () => {
+    const spy = vi.spyOn(store, 'togglePin').mockImplementation(async () => {})
+    const w = mountBar()
+    await openMenu(w, 'p0')
+    await w.get('[data-testid="menu-pin"]').trigger('click')
+    expect(spy).toHaveBeenCalledWith('p0', false) // p0 已置顶 -> 翻转值原样下发
+  })
+
+  it('rename via the menu opens an inline editor; confirming PATCHes the title', async () => {
     const spy = vi.spyOn(store, 'renameSession').mockImplementation(async () => {})
     const w = mountBar()
-    const s2 = w.findAll('.session-row').find((n) => n.text().includes('s2'))
-    await s2.find('[data-testid="rename-button"]').trigger('click')
+    await openMenu(w, 's2')
+    await w.get('[data-testid="menu-rename"]').trigger('click')
     const input = w.get('[data-testid="rename-input"]')
     await input.setValue('新标题')
     await w.get('[data-testid="rename-confirm"]').trigger('click')
@@ -74,20 +96,47 @@ describe('SessionSidebar', () => {
   it('rename: Escape cancels without calling the store', async () => {
     const spy = vi.spyOn(store, 'renameSession').mockImplementation(async () => {})
     const w = mountBar()
-    const s2 = w.findAll('.session-row').find((n) => n.text().includes('s2'))
-    await s2.find('[data-testid="rename-button"]').trigger('click')
+    await openMenu(w, 's2')
+    await w.get('[data-testid="menu-rename"]').trigger('click')
     await w.get('[data-testid="rename-input"]').setValue('别改')
     await w.get('[data-testid="rename-input"]').trigger('keydown.esc')
     expect(spy).not.toHaveBeenCalled()
     expect(w.find('[data-testid="rename-input"]').exists()).toBe(false)
   })
 
-  it('delete calls removeSession for that row', async () => {
+  it('copy link writes the deep link of that session to the clipboard', async () => {
+    const writeText = vi.fn()
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+    const w = mountBar()
+    await openMenu(w, 's2')
+    await w.get('[data-testid="menu-copy"]').trigger('click')
+    expect(writeText).toHaveBeenCalled()
+    expect(writeText.mock.calls[0][0]).toContain('/chat/s2')
+  })
+
+  it('delete asks for confirmation in a Popconfirm, never window.confirm', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
     const spy = vi.spyOn(store, 'removeSession').mockImplementation(async () => {})
     const w = mountBar()
-    const s2 = w.findAll('.session-row').find((n) => n.text().includes('s2'))
-    await s2.find('[data-testid="delete-button"]').trigger('click')
+    await openMenu(w, 's2')
+    await w.get('[data-testid="menu-delete"]').trigger('click')
+    expect(w.find('[data-testid="confirm-dialog"]').exists()).toBe(true)
+    expect(spy).not.toHaveBeenCalled() // 弹层出现 != 已删除
+    await w.get('[data-testid="confirm-cancel"]').trigger('click')
+    expect(w.find('[data-testid="confirm-dialog"]').exists()).toBe(false)
+    expect(spy).not.toHaveBeenCalled()
+    expect(confirmSpy).not.toHaveBeenCalled()
+  })
+
+  it('delete: confirming the Popconfirm calls removeSession for that row', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const spy = vi.spyOn(store, 'removeSession').mockImplementation(async () => {})
+    const w = mountBar()
+    await openMenu(w, 's2')
+    await w.get('[data-testid="menu-delete"]').trigger('click')
+    await w.get('[data-testid="confirm-ok"]').trigger('click')
     expect(spy).toHaveBeenCalledWith('s2')
+    expect(w.find('[data-testid="confirm-dialog"]').exists()).toBe(false)
   })
 
   it('collapse hides the list and the toggle flips the ui store', async () => {
@@ -102,8 +151,21 @@ describe('SessionSidebar', () => {
     expect(ui.sidebarCollapsed).toBe(false)
   })
 
-  it('shows a bottom settings area with the app name and default mode', () => {
+  it('the footer carries the brand, the mode readout and a working theme toggle', async () => {
+    const ui = useUiStore()
     const w = mountBar()
     expect(w.find('[data-testid="sidebar-footer"]').text()).toContain('small_dify Agent')
+    expect(w.find('[data-testid="mode"]').text()).toBe('review')
+    await w.get('[data-testid="theme-toggle"]').trigger('click')
+    expect(ui.theme).toBe('dark')
+    expect(document.documentElement.dataset.theme).toBe('dark')
+  })
+
+  it('shows skeleton rows while the very first list load is pending', () => {
+    store.sessionsLoaded = false
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {}))) // never resolves
+    const w = mountBar()
+    expect(w.findAll('[data-testid="session-skeleton"]').length).toBeGreaterThan(0)
+    expect(w.find('.session-row').exists()).toBe(false)
   })
 })

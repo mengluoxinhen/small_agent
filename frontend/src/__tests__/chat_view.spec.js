@@ -2,11 +2,15 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { useAgentStore } from '../stores/agent'
+import { useUiStore } from '../stores/ui'
+import { useToastStore } from '../stores/toast'
 import ChatView from '../components/ChatView.vue'
 
 /**
- * P7 assembly check: ChatView wires the store into the screen — messages (markdown),
- * the trace panel, and the approval dialog that appears exactly while awaiting.
+ * V4 right column: /chat/:sessionId path routing with refresh restore and a
+ * recent-session fallback, a sticky header (inline rename, status pill,
+ * share/export/clear, mode segments), per-bubble hover actions, streaming
+ * affordances (typing dots + blinking cursor), quick prompts, and the composer.
  * The SSE layer and markstream-vue are stubbed; their own specs cover behaviour.
  */
 
@@ -27,13 +31,31 @@ function mountView() {
   return mount(ChatView)
 }
 
+function routes(handler) {
+  vi.stubGlobal('fetch', vi.fn(async (url) => {
+    const data = handler(String(url))
+    return { ok: true, status: 200, json: async () => data }
+  }))
+}
+
+// GET /api/sessions -> list; /sessions/:id -> row; any events -> []
+function sessionRoutes(sessions) {
+  routes((u) => {
+    if (u.includes('/events')) return []
+    const m = u.match(/\/api\/sessions\/([^/?]+)/)
+    if (m) return { id: m[1], mode: 'review', title: m[1] }
+    return sessions
+  })
+}
+
 beforeEach(() => {
   setActivePinia(createPinia())
-  // the sidebar lists sessions on mount; keep that network call inert here
+  window.history.replaceState({}, '', '/')
+  // the shell lists sessions on mount; keep that network call inert by default
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => [] })))
 })
 
-describe('ChatView', () => {
+describe('ChatView (V4)', () => {
   it('renders user and assistant messages from the store', () => {
     const store = useAgentStore()
     store.$patch({
@@ -50,10 +72,7 @@ describe('ChatView', () => {
 
   it('shows the approval dialog only while the run awaits a decision', async () => {
     const store = useAgentStore()
-    store.$patch({
-      status: 'streaming',
-      messages: [],
-    })
+    store.$patch({ status: 'streaming', messages: [] })
     const wrapper = mountView()
     expect(wrapper.find('[data-testid="approval-dialog"]').exists()).toBe(false)
 
@@ -75,16 +94,22 @@ describe('ChatView', () => {
     expect(spy).toHaveBeenCalledWith('你好')
   })
 
-  // ------------------------------------------------------------ U3：会话式右栏
-
-  it('shows an empty state when there is neither a session nor messages', () => {
+  it('shows an empty welcome with four quick-prompt cards that only fill the input', async () => {
+    const store = useAgentStore()
+    const spy = vi.spyOn(store, 'send').mockImplementation(async () => {})
     const w = mountView()
     expect(w.find('[data-testid="empty-state"]').exists()).toBe(true)
     expect(w.text()).toContain('小助手')
+    const cards = w.findAll('[data-testid="quick-prompt"]')
+    expect(cards).toHaveLength(4)
+    await cards[0].trigger('click')
+    expect(w.get('[data-testid="chat-input"]').element.value).toBeTruthy()
+    expect(spy).not.toHaveBeenCalled()
   })
 
   it('the header shows the current session title', async () => {
     const store = useAgentStore()
+    store.sessionsLoaded = true
     store.$patch({
       sessionId: 's1',
       sessions: [{ id: 's1', title: '会话甲' }],
@@ -106,7 +131,7 @@ describe('ChatView', () => {
     expect(spy).toHaveBeenCalledWith('多行输入')
   })
 
-  it('the last finished answer offers copy and regenerate', async () => {
+  it('every finished answer offers copy and thumbs; regenerate only on the last', async () => {
     const store = useAgentStore()
     const writeText = vi.fn()
     vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
@@ -123,10 +148,14 @@ describe('ChatView', () => {
     })
     const w = mountView()
     await w.vm.$nextTick()
-    // 只有最后一条 AI 消息给这两个按钮
-    expect(w.findAll('[data-testid="copy-answer"]')).toHaveLength(1)
-    await w.get('[data-testid="copy-answer"]').trigger('click')
-    expect(writeText).toHaveBeenCalledWith('最新答案')
+    expect(w.findAll('[data-testid="copy-answer"]')).toHaveLength(2)
+    await w.findAll('[data-testid="copy-answer"]')[0].trigger('click')
+    expect(writeText).toHaveBeenCalledWith('老答案')
+    // 赞踩挂在每条回答上；重新生成只给最后一条
+    expect(w.findAll('[data-testid="thumb-up"]')).toHaveLength(2)
+    await w.findAll('[data-testid="thumb-up"]')[1].trigger('click')
+    expect(store.messages[3].feedback).toBe('up')
+    expect(w.findAll('[data-testid="regenerate-button"]')).toHaveLength(1)
     await w.get('[data-testid="regenerate-button"]').trigger('click')
     expect(regen).toHaveBeenCalled()
   })
@@ -141,6 +170,30 @@ describe('ChatView', () => {
     const w = mountView()
     expect(w.find('[data-testid="cancel-button"]').exists()).toBe(true)
     expect(w.find('[data-testid="regenerate-button"]').exists()).toBe(false)
+  })
+
+  it('shows typing dots while streaming has not produced the first token', () => {
+    const store = useAgentStore()
+    store.$patch({
+      status: 'streaming',
+      sessionId: 's1',
+      messages: [{ role: 'user', text: '问题' }],
+    })
+    const w = mountView()
+    expect(w.find('[data-testid="typing-dots"]').exists()).toBe(true)
+    expect(w.find('[data-testid="stream-cursor"]').exists()).toBe(false)
+  })
+
+  it('a streaming bubble carries the blinking cursor instead of the dots', () => {
+    const store = useAgentStore()
+    store.$patch({
+      status: 'streaming',
+      sessionId: 's1',
+      messages: [{ role: 'assistant', text: '部分输出', streaming: true }],
+    })
+    const w = mountView()
+    expect(w.find('[data-testid="typing-dots"]').exists()).toBe(false)
+    expect(w.find('[data-testid="stream-cursor"]').exists()).toBe(true)
   })
 
   it('steps of the current run are collapsible inside the answer bubble', async () => {
@@ -164,35 +217,120 @@ describe('ChatView', () => {
     expect(w.find('[data-testid="trace-step"]').text()).toContain('calculator')
   })
 
-  it('URL carries ?sid= and a fresh mount restores that session', async () => {
-    window.history.replaceState({}, '', '/?sid=s9')
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (url) => {
-        const u = String(url)
-        if (u.includes('events')) return { ok: true, status: 200, json: async () => [] }
-        if (u.includes('/sessions/s9')) return { ok: true, status: 200, json: async () => ({ id: 's9', mode: 'review' }) }
-        return { ok: true, status: 200, json: async () => [] }
-      }),
-    )
+  it('/chat/:id on mount restores that session', async () => {
+    window.history.replaceState({}, '', '/chat/s9')
+    sessionRoutes([{ id: 's9', title: '九', updated_at: new Date().toISOString() }])
     const store = useAgentStore()
     const w = mountView()
     await w.vm.$nextTick()
     await vi.waitFor(() => expect(store.sessionId).toBe('s9'))
+    expect(w.get('[data-testid="chat-title"]').text()).toContain('九')
   })
 
-  it('sessionId changes rewrite the URL without a reload', async () => {
-    window.history.replaceState({}, '', '/')
+  it('a legacy ?sid= link still restores the session (backward compat)', async () => {
+    window.history.replaceState({}, '', '/?sid=s9')
+    sessionRoutes([{ id: 's9', title: '九', updated_at: new Date().toISOString() }])
+    const store = useAgentStore()
+    mountView()
+    await vi.waitFor(() => expect(store.sessionId).toBe('s9'))
+  })
+
+  it('sessionId changes rewrite the path without a reload', async () => {
     const w = mountView()
     const store = useAgentStore()
     store.$patch({ sessionId: 's42' })
     await w.vm.$nextTick()
     await w.vm.$nextTick()
-    expect(window.location.search).toBe('?sid=s42')
+    expect(window.location.pathname).toBe('/chat/s42')
     store.$patch({ sessionId: null })
     await w.vm.$nextTick()
     await w.vm.$nextTick()
-    expect(window.location.search).toBe('')
+    expect(window.location.pathname).toBe('/')
+  })
+
+  it('mounting "/" with history but no id selects the most recent session', async () => {
+    sessionRoutes([
+      { id: 'sOld', title: '旧的', updated_at: '2026-01-01T00:00:00Z', pinned: false },
+      { id: 'sTop', title: '最近', updated_at: '2026-10-10T09:00:00Z', pinned: true },
+    ])
+    const store = useAgentStore()
+    mountView()
+    await vi.waitFor(() => expect(store.sessionId).toBe('sTop'))
+  })
+
+  it('the header title renames inline through the store action', async () => {
+    const store = useAgentStore()
+    store.sessionsLoaded = true
+    store.$patch({
+      sessionId: 's1',
+      sessions: [{ id: 's1', title: '会话甲' }],
+      messages: [{ role: 'user', text: 'x' }],
+    })
+    const spy = vi.spyOn(store, 'renameSession').mockImplementation(async () => {})
+    const w = mountView()
+    await w.get('[data-testid="title-edit"]').trigger('click')
+    await w.get('[data-testid="title-input"]').setValue('新名')
+    await w.get('[data-testid="title-confirm"]').trigger('click')
+    expect(spy).toHaveBeenCalledWith('s1', '新名')
+  })
+
+  it('share copies the deep link; export downloads the chat as JSON', async () => {
+    const writeText = vi.fn()
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+    const createObjectURL = vi.fn(() => 'blob:export')
+    window.URL.createObjectURL = createObjectURL
+    window.URL.revokeObjectURL = vi.fn()
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    const store = useAgentStore()
+    store.$patch({
+      sessionId: 's1',
+      messages: [
+        { role: 'user', text: '问' },
+        { role: 'assistant', text: '答', streaming: false },
+      ],
+    })
+    const w = mountView()
+    await w.get('[data-testid="share-button"]').trigger('click')
+    expect(writeText.mock.calls[0][0]).toContain('/chat/s1')
+    await w.get('[data-testid="export-button"]').trigger('click')
+    expect(createObjectURL).toHaveBeenCalled()
+    expect(anchorClick).toHaveBeenCalled()
+  })
+
+  it('clear resets the current view to a blank session and toasts the truth', async () => {
+    const store = useAgentStore()
+    store.sessionsLoaded = true
+    store.$patch({ sessionId: 's1', messages: [{ role: 'user', text: 'x' }] })
+    const w = mountView()
+    await w.get('[data-testid="clear-button"]').trigger('click')
+    expect(store.sessionId).toBeNull()
+    expect(store.messages).toEqual([])
+    expect(useToastStore().items.length).toBeGreaterThan(0)
+  })
+
+  it('an error renders an inline card whose retry re-runs the last question', async () => {
+    const store = useAgentStore()
+    store.$patch({
+      status: 'error',
+      sessionId: 's1',
+      error: '发送失败：boom',
+      messages: [{ role: 'user', text: '问题' }],
+    })
+    const regen = vi.spyOn(store, 'regenerate').mockImplementation(async () => {})
+    const w = mountView()
+    expect(w.find('[data-testid="error-card"]').exists()).toBe(true)
+    expect(w.text()).toContain('boom')
+    await w.get('[data-testid="error-retry"]').trigger('click')
+    expect(regen).toHaveBeenCalled()
+  })
+
+  it('the mode segments switch the run mode', async () => {
+    const ui = useUiStore()
+    const w = mountView()
+    await w.get('[data-testid="mode-seg-full_access"]').trigger('click')
+    expect(ui.mode).toBe('full_access')
+    await w.get('[data-testid="mode-seg-review"]').trigger('click')
+    expect(ui.mode).toBe('review')
   })
 
   it('the attach button reads the file and hands base64 to the store', async () => {
