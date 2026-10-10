@@ -11,6 +11,7 @@ export const useUiStore = defineStore('ui', {
   state: () => ({
     mode: 'review',
     modes: ['review', 'full_access'],
+    sidebarCollapsed: false,
   }),
   actions: {
     setMode(mode) {
@@ -18,6 +19,9 @@ export const useUiStore = defineStore('ui', {
         throw new Error(`unknown run mode: ${mode}`)
       }
       this.mode = mode
+    },
+    toggleSidebar() {
+      this.sidebarCollapsed = !this.sidebarCollapsed
     },
   },
 })

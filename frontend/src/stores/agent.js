@@ -29,7 +29,9 @@ export const useAgentStore = defineStore('agent', {
     turns: 0,
     error: null,
     lastEventId: 0,
+    runAnchor: 0, // messages.length when the current run started; bubbles at/after it belong to this run
     sessions: [],
+    attachments: [], // [{filename, bytes}] uploaded into the current session workspace
   }),
   actions: {
     // ---------------------------------------------------------- reducer
@@ -50,6 +52,8 @@ export const useAgentStore = defineStore('agent', {
           this.status = 'streaming'
           this.error = null
           this.pendingApproval = null
+          this.trace = [] // one run's steps belong to one answer bubble (U3)
+          this.runAnchor = this.messages.length // bubbles created at/after this index are this run's
           break
         case 'user_message': {
           // live send() already pushed this bubble locally; history replay pushes here
@@ -97,9 +101,11 @@ export const useAgentStore = defineStore('agent', {
           this.turns = payload.turns ?? 0
           this.pendingApproval = null
           this.closeStreaming()
+          this.flushSteps()
           break
         case 'run_error':
           this.closeStreaming()
+          this.flushSteps() // steps of an errored/cancelled run must stay visible too
           if (payload.kind === 'cancelled') {
             this.status = 'cancelled'
             this.error = null
@@ -135,6 +141,27 @@ export const useAgentStore = defineStore('agent', {
       for (const m of this.messages) if (m.streaming) m.streaming = false
     },
 
+    /**
+     * U3: when a run ends, its tool steps move from the live trace onto the answer
+     * bubble they produced, so every assistant message carries its own process.
+     * A run that ended without any text still gets a (content-less) bubble to hold them.
+     */
+    flushSteps() {
+      if (!this.trace.length) return
+      const steps = this.trace
+      this.trace = []
+      this.argsBuffer = {}
+      const idx = this.messages.length - 1
+      const last = this.messages.at(-1)
+      // attach only to a bubble THIS run created (index >= the run_started anchor),
+      // otherwise a text-less run would graft its steps onto the previous answer
+      if (idx >= this.runAnchor && last && last.role === 'assistant') {
+        last.steps = steps
+      } else {
+        this.messages.push({ role: 'assistant', text: '', streaming: false, steps })
+      }
+    },
+
     // ---------------------------------------------------------- session plumbing
 
     resetStreamState() {
@@ -143,11 +170,13 @@ export const useAgentStore = defineStore('agent', {
       this.messages = []
       this.trace = []
       this.argsBuffer = {}
+      this.attachments = []
       this.pendingApproval = null
       this.usage = null
       this.turns = 0
       this.error = null
       this.lastEventId = 0
+      this.runAnchor = 0
     },
 
     async refreshSessions() {
@@ -212,6 +241,12 @@ export const useAgentStore = defineStore('agent', {
 
     async send(text) {
       const ui = useUiStore()
+      // attachments already landed in the session workspace; tell the model their
+      // exact filenames so it can read them with the file tools (U3)
+      const note = this.attachments.length
+        ? `\n（已上传附件：${this.attachments.map((a) => a.filename).join('、')}，可直接用文件名读取）`
+        : ''
+      const fullText = text + note
       try {
         if (!this.sessionId) {
           const session = await api.createSession({ title: text.slice(0, 24), mode: ui.mode })
@@ -222,8 +257,9 @@ export const useAgentStore = defineStore('agent', {
           const patched = await api.patchSession(this.sessionId, { mode: ui.mode })
           this.sessionMode = patched.mode
         }
-        this.messages.push({ role: 'user', text })
-        const { run_id: runId } = await api.sendMessage(this.sessionId, text)
+        this.messages.push({ role: 'user', text: fullText })
+        const { run_id: runId } = await api.sendMessage(this.sessionId, fullText)
+        this.attachments = []
         this.beginLocalRun(runId)
         this.connect()
       } catch (err) {
@@ -259,9 +295,67 @@ export const useAgentStore = defineStore('agent', {
     },
 
     async removeSession(sessionId) {
-      await api.deleteSession(sessionId)
-      if (this.sessionId === sessionId) this.startNewSession()
-      await this.refreshSessions()
+      try {
+        await api.deleteSession(sessionId)
+        await this.refreshSessions()
+        if (this.sessionId === sessionId) {
+          // U3: deleting the current session lands on its neighbour, not on a blank
+          const next = this.sessions[0]
+          if (next) await this.loadSession(next.id)
+          else this.startNewSession()
+        }
+      } catch (err) {
+        this.reportError(`删除会话失败：${err.message}`)
+      }
+    },
+
+    async renameSession(sessionId, title) {
+      try {
+        await api.patchSession(sessionId, { title })
+        await this.refreshSessions()
+      } catch (err) {
+        this.reportError(`重命名失败：${err.message}`)
+      }
+    },
+
+    async togglePin(sessionId, pinned) {
+      try {
+        // false must go on the wire as-is; the server coerces bool -> INTEGER
+        await api.patchSession(sessionId, { pinned })
+        await this.refreshSessions()
+      } catch (err) {
+        this.reportError(`置顶切换失败：${err.message}`)
+      }
+    },
+
+    async uploadAttachment({ name, base64 }) {
+      try {
+        if (!this.sessionId) {
+          const session = await api.createSession({ title: name.slice(0, 24), mode: useUiStore().mode })
+          this.sessionId = session.id
+          this.sessionMode = session.mode
+        }
+        const chip = await api.uploadSessionFile(this.sessionId, { filename: name, content_base64: base64 })
+        this.attachments.push(chip)
+      } catch (err) {
+        this.reportError(`附件上传失败：${err.message}`)
+      }
+    },
+
+    /** Drop the last answer and re-run its question (U3 重新生成). */
+    async regenerate() {
+      const idx = this.messages.map((m) => m.role).lastIndexOf('user')
+      if (idx === -1 || !this.sessionId) return
+      const text = this.messages[idx].text
+      this.messages.splice(idx + 1) // keep the question, drop the unsatisfying answer
+      try {
+        const { run_id: runId } = await api.sendMessage(this.sessionId, text)
+        this.beginLocalRun(runId)
+        this.connect()
+      } catch (err) {
+        this.status = 'error'
+        this.reportError(`重新生成失败：${err.message}`)
+      }
     },
   },
 })

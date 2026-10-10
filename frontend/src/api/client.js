@@ -36,4 +36,6 @@ export const api = {
   decideApprovals: (runId, decisions) => request(`/runs/${runId}/approvals`, { method: 'POST', body: decisions }),
   cancelRun: (runId) => request(`/runs/${runId}/cancel`, { method: 'POST' }),
   fetchEvents: (sid) => request(`/sessions/${sid}/events?format=json`),
+  // U3 attachment upload: { filename, content_base64 } -> { filename, bytes }
+  uploadSessionFile: (sid, payload) => request(`/sessions/${sid}/files`, { method: 'POST', body: payload }),
 }

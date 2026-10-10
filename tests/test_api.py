@@ -94,6 +94,58 @@ async def test_unknown_session_message_is_404(tmp_path: Path):
         assert resp.status_code == 404
 
 
+# ---------------------------------------------------------------- pinned & ordering
+
+
+async def test_patch_pinned_roundtrips_and_orders_the_list(tmp_path: Path):
+    app = create_app(make_settings(tmp_path), agent_factory=scripted_factory([]))
+    async with client_for(app) as client:
+        a = await create_session(client, title="a")
+        b = await create_session(client, title="b")
+        assert (await client.get(f"/sessions/{a}")).json()["pinned"] is False
+
+        pinned = await client.patch(f"/sessions/{b}", json={"pinned": True})
+        assert pinned.status_code == 200 and pinned.json()["pinned"] is True
+        order = [s["id"] for s in (await client.get("/sessions")).json()]
+        assert order[0] == b
+
+        unpinned = await client.patch(f"/sessions/{b}", json={"pinned": False})
+        assert unpinned.json()["pinned"] is False  # explicit false must clear, not be dropped
+
+
+# ---------------------------------------------------------------- attachments
+
+
+async def test_attachment_upload_lands_in_the_session_workspace(tmp_path: Path):
+    app = create_app(make_settings(tmp_path), agent_factory=scripted_factory([]))
+    async with client_for(app) as client:
+        sid = await create_session(client)
+        body = {"filename": "case.csv", "content_base64": "YSwxLDIsMw=="}  # "a,1,2,3"
+        resp = await client.post(f"/sessions/{sid}/files", json=body)
+        assert resp.status_code == 201, resp.text
+        assert resp.json() == {"filename": "case.csv", "bytes": 7}
+        landed = tmp_path / "data" / "workspaces" / sid / "case.csv"
+        assert landed.read_text(encoding="utf-8") == "a,1,2,3"
+
+
+async def test_attachment_upload_validation(tmp_path: Path):
+    app = create_app(make_settings(tmp_path), agent_factory=scripted_factory([]))
+    async with client_for(app) as client:
+        sid = await create_session(client)
+        assert (await client.post("/sessions/nope/files", json={"filename": "x", "content_base64": ""})).status_code == 404
+        escaping = await client.post(f"/sessions/{sid}/files", json={"filename": "../escape.txt", "content_base64": "eA=="})
+        assert escaping.status_code == 400
+        assert not (tmp_path / "data" / "workspaces" / "escape.txt").exists()
+        assert not (tmp_path / "data" / "escape.txt").exists()
+        bad_b64 = await client.post(f"/sessions/{sid}/files", json={"filename": "x.bin", "content_base64": "!!!not base64!!!"})
+        assert bad_b64.status_code == 400
+        huge = await client.post(
+            f"/sessions/{sid}/files", json={"filename": "big.bin", "content_base64": "A" * 4_000_000}
+        )
+        assert huge.status_code == 413
+
+
+
 # ---------------------------------------------------------------- message runs
 
 

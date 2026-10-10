@@ -365,4 +365,25 @@ P2 将新建 `app/tools/`（注册表 + 5 个 builtin 工具 + 风险声明）�
 5. **真模型门（§10 P8 的最后一格）不在我手里**：`-m live`、`ping_model.py` 和"3 个真实任务留日志"需要你的 DeepSeek key。fake 侧的等价证据链已完整（同一 SDK 通道、同一事件契约、T3 的 live 用例与 fake 用例断言同一组事实）。
 6. 收尾纪律执行：ruff 抓到 T7 初稿的未用变量与 import 排序并清零；三台验证用的后台服务（8000/8011/5173）全部关停、临时脚本与临时数据目录删除；`git status` 全清单核对无游离文件。P2–P8 尚未提交，等你发话。
 
+### U 系列：会话式界面改造（2026-10-10，需求=把网页改成 DeepSeek 式双栏会话布局）
+
+| 阶段 | 状态 | 证据 |
+|---|---|---|
+| U1 现状与缺口调研 | **通过** | 逐条对照 6 点需求列出缺口：后端缺 pinned/上传接口、前端缺分组侧栏/URL 恢复/每消息步骤/复制/重生成/附件 |
+| U2 后端 | **通过** | `sessions.pinned`（INTEGER DEFAULT 0 + `PRAGMA table_info` 幂等 ALTER 兼容旧库）；PATCH 放行 title/mode/pinned（bool→int，`exclude_none` 不误丢 false）；列表 `pinned DESC, updated_at DESC` 排序；`POST /sessions/{id}/files` base64 附件上传（≤1MB、workspace 内 `safe_path` 复用、非法 base64/越界/超限分别 400/400/413）；后端全量 261 passed / 1 skipped，`ruff` 干净；真实库 `scripts/migrate.py` 实跑升级 |
+| U3 前端 | **通过** | 先 RED 20+ 条再实现（后修正 3 条 RED 自身缺陷：togglePin 用例 GET 分支引用 null body、failFetch 作用域、pin 翻转期望值）；新增 SessionSidebar（新建/搜索/分组/行内重命名/置顶/删除/折叠/底部设置）与 utils（groups.js、attachment.js）；ChatView 重写（标题栏、Enter/Shift+Enter、复制、重新生成、每消息可折叠步骤、实时轨迹、吸底多行输入 + 附件）；store 新增 renameSession/togglePin/uploadAttachment/regenerate、removeSession 相邻切换、run_started→runAnchor、run_finished/error→flushSteps 步骤快照；vitest 80 passed（10 文件），`vite build` 成功 |
+| U4 回归 + 手验 | **通过** | 后端 261 + ruff + migrate 幂等；前端 80 + build；浏览器实跑（fake 后端 + 临时 scripted launcher 走 `create_app(agent_factory=...)` seam）：发消息→URL ?sid=→刷新历史完整恢复→置顶分组迁移→重命名同步标题→搜索过滤→新建自动切换→切换/删除会话（相邻→空白兜底）→附件 chip→带附件消息附注→服务器 workspace 落盘→复制/重新生成→折叠步骤（data-status=success、耗时）→审批弹窗（awaiting→展示参数→批准→恢复直达 done）→错误态诚实展示；验证后临时脚本/临时数据目录删除、端口 8000/5173 清空（含一枚历史 vite 残留进程）。**同日 DashScope 充值后真模型三门复跑全过**：ping（in=67/out=36）、`pytest -m live`、三任务门 gate1 review 审批链 turns=4·result.txt=="56" / gate2 纯问答零工具 / gate3 full_access write→read→calculator 含 600，日志 `data/live_gate/gate*.jsonl` |
+
+### U 系列实施中的偏差与发现
+1. **附件上传不引 multipart 依赖**：`{filename, content_base64}` JSON + 服务端校验（大小上限、base64 合法性、`safe_path` 防越界），复用既有工具层防线，前端 `FileReader.readAsDataURL` 切割前缀即可，零新依赖。
+2. **步骤归属用 `runAnchor` 钉死**：`run_started` 记录 `messages.length` 锚点，`flushSteps` 只把步骤挂到"本 run 创建的气泡"；无锚点时一次无正文的 run 会把步骤错接到上一条答案上。
+3. **pinned=false 必须原样下发**：SQLite 无 BOOLEAN 靠 int 存；前端若用"falsy 即删字段"的通用 patch 写法会永远无法取消置顶——专门一条 RED 锁死 `{pinned:false}` 上线。
+4. **URL 同步不走 vue-router**：单人应用一页一屏，`?sid=` + `history.replaceState` 足够，路由依赖为零（偏差于"刷新恢复"的常见实现路径）。
+5. **重命名内联编辑器不加确认弹窗**：Enter 确认、Esc 取消、✓ 按钮兜底；测试锁死"Esc 不得触发 PATCH"。
+6. **真模型手验被外部阻断**：DashScope 账号欠费（错误码 `Arrearage`），qwen3.8-flash 暂不可用；界面改造本身不依赖模型侧（工具步骤/审批用测试同一 seam 的 scripted fake 全链路验证），真实模型回归等你把账号恢复后 `-m live` + `ping_model.py` 复跑即可。**（2026-10-10 已解除：充值后三扇真模型门复跑全过——ping in=67/out=36；`pytest -m live` 通过；三任务门 gate1 review 审批链 turns=4、result.txt=="56"，gate2 纯问答零工具零审批，gate3 full_access write→read→calculator 链、答案含 600；日志 `data/live_gate/gate*.jsonl`；临时驱动脚本与临时数据目录已删）**
+7. **手验抓到一处 RED 期望自错**（非实现 bug）：pin 翻转用例把"已置顶行"的期望写成 pin=true；以 fixture 语义修正为 unpin 方向，并保留"翻转值原样下发"断言。
+8. 收尾纪律执行：删除临时演示 `scripts/_ui_demo.py`、充值后复跑用的临时真模型门驱动 `scripts/_live_gate_scratch.py`，以及 `data_ui_check/`、`data_ui_live/`、`data/live_gate_run/`；`scripts/__pycache__` 残留清除；`git status` 核对——改动只落 U 系列相关文件。U2–U4 未提交，等你发话。
+
+
+
 

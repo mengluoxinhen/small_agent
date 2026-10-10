@@ -1,37 +1,34 @@
 <script setup>
-import { useUiStore } from './stores/ui'
+import SessionSidebar from './components/SessionSidebar.vue'
 import ChatView from './components/ChatView.vue'
-
-const ui = useUiStore()
 </script>
 
 <template>
-  <header class="bar">
-    <h1>small_dify Agent</h1>
-    <p class="mode-line">
-      运行模式：<strong data-testid="mode">{{ ui.mode }}</strong>
-      <span class="hint">（切换开关在右下角对话面板顶栏，作用于下一条消息）</span>
-    </p>
-  </header>
-  <ChatView />
+  <div class="app">
+    <SessionSidebar />
+    <ChatView />
+  </div>
 </template>
 
-<style scoped>
-.bar {
-  max-width: 1080px;
-  margin: 1rem auto 0;
-  padding: 0 1rem;
-}
-.bar h1 {
+<style>
+html,
+body,
+#app {
+  height: 100%;
   margin: 0;
-  font-size: 1.3rem;
 }
-.mode-line {
-  margin: 0.3rem 0 0;
-  font-size: 0.82rem;
-  color: #666;
+body {
+  font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  color: #222;
+  background: #fff;
 }
-.hint {
-  color: #999;
+</style>
+
+<style scoped>
+.app {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  height: 100vh;
+  overflow: hidden;
 }
 </style>

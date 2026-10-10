@@ -18,7 +18,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     mode TEXT NOT NULL,
     model TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    pinned INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS runs (
     id TEXT PRIMARY KEY,
@@ -73,3 +74,8 @@ def connect(path: Path | str) -> sqlite3.Connection:
 def migrate(conn: sqlite3.Connection) -> None:
     """Create the schema; safe to run repeatedly (everything is IF NOT EXISTS)."""
     conn.executescript(SCHEMA)
+    # Databases predating the UI redesign have no `pinned` column: ALTER instead of
+    # recreate, so existing sessions survive the upgrade (DEFAULT fills the rows).
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(sessions)")}
+    if "pinned" not in columns:
+        conn.execute("ALTER TABLE sessions ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0")

@@ -63,6 +63,22 @@ describe('TracePanel', () => {
     expect(steps[2].classes()).toContain('pending')
   })
 
+  it('U3: exposes a four-state status per step via data-status', () => {
+    const wrapper = mountPanel([
+      { kind: 'tool', call_id: 'z', tool: '', risk: '', args: '', result: null }, // 已排队未开跑
+      PENDING_STEP, // 有工具名、无结果 → running
+      OK_STEP,
+      FAILED_STEP,
+    ])
+    const statuses = wrapper.findAll('[data-testid="trace-step"]').map((n) => n.attributes('data-status'))
+    expect(statuses).toEqual(['pending', 'running', 'success', 'error'])
+  })
+
+  it('U3: an empty trace can suppress the default title (embedded mode)', () => {
+    const wrapper = mount(TracePanel, { props: { trace: [], title: '' } })
+    expect(wrapper.text()).not.toContain('执行轨迹')
+  })
+
   it('shows a placeholder when the trace is empty', () => {
     const wrapper = mountPanel([])
     expect(wrapper.findAll('[data-testid="trace-step"]')).toHaveLength(0)

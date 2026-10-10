@@ -13,6 +13,8 @@ wiring (`scripts/serve.py`) uses the default factory built from `Settings`.
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -34,6 +36,10 @@ from app.runtime import (
     Runtime,
 )
 from app.store import InvalidTransitionError, Store
+from app.tools.errors import ToolInputError
+from app.tools.impl.files import safe_path
+
+MAX_UPLOAD_BYTES = 1_000_000
 
 STREAM_CLOSE_EVENTS = frozenset({"run_finished", "run_error", "approval_required"})
 """Terminal-for-SSE-close: a client reconnects with Last-Event-ID after a pause."""
@@ -50,6 +56,12 @@ class SessionCreate(BaseModel):
 class SessionPatch(BaseModel):
     title: str | None = None
     mode: RunMode | None = None
+    pinned: bool | None = None
+
+
+class AttachmentCreate(BaseModel):
+    filename: str = Field(min_length=1, max_length=200)
+    content_base64: str
 
 
 class MessageCreate(BaseModel):
@@ -156,6 +168,32 @@ def create_app(settings: Settings | None = None, *, agent_factory: AgentFactory 
         _require_session(session_id)
         runtime.cancel_session_runs(session_id)
         store.delete_session(session_id)
+
+    @app.post("/sessions/{session_id}/files", status_code=201)
+    async def upload_attachment(session_id: str, body: AttachmentCreate) -> dict[str, Any]:
+        """Put a user-attached file into the session workspace (base64 JSON, no new deps).
+
+        The agent then sees it through the existing list/read tools; filenames go
+        through the same workspace-conf validation as the tools, so `../` never escapes.
+        """
+        _require_session(session_id)
+        workspace = runtime.workspace_for(session_id)
+        workspace.mkdir(parents=True, exist_ok=True)
+        try:
+            payload = base64.b64decode(body.content_base64, validate=True)
+        except binascii.Error as exc:
+            raise HTTPException(status_code=400, detail="content_base64 不是合法的 base64") from exc
+        if len(payload) > MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"附件过大：{len(payload)} 字节，上限 {MAX_UPLOAD_BYTES} 字节",
+            )
+        try:
+            target = safe_path(workspace, body.filename)
+        except ToolInputError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        target.write_bytes(payload)
+        return {"filename": target.name, "bytes": len(payload)}
 
     # ------------------------------------------------------------- runs
 

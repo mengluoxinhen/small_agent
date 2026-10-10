@@ -60,6 +60,46 @@ def test_migrate_is_idempotent(db_path: Path):
     conn.close()
 
 
+def test_migrate_upgrades_a_legacy_sessions_table(tmp_path: Path):
+    """Databases created before the UI redesign lack `pinned`; migrate must ALTER, not recreate."""
+    db = tmp_path / "legacy.db"  # NOT the db_path fixture: that one is already migrated
+    conn = sqlite3.connect(str(db), isolation_level=None)
+    conn.execute(
+        "CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, mode TEXT NOT NULL,"
+        " model TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+    )
+    conn.execute("INSERT INTO sessions VALUES ('old', '旧会话', 'review', 'm', 't1', 't1')")
+    conn.close()
+
+    conn = connect(db)
+    migrate(conn)
+    migrate(conn)  # idempotent even when the column already exists
+    row = conn.execute("SELECT * FROM sessions WHERE id = 'old'").fetchone()
+    assert dict(row)["pinned"] == 0
+    conn.close()
+
+
+def test_sessions_start_unpinned_and_expose_pinned_as_bool(store: Store):
+    fresh_session(store)
+    assert store.get_session("s1")["pinned"] is False
+
+
+def test_update_session_can_pin_and_unpin(store: Store):
+    fresh_session(store)
+    assert store.update_session("s1", pinned=True)["pinned"] is True
+    assert store.get_session("s1")["pinned"] is True
+    assert store.update_session("s1", pinned=False)["pinned"] is False
+
+
+def test_list_sessions_puts_pinned_first_then_recently_updated(store: Store):
+    for sid in ("a", "b", "c"):
+        store.create_session(id=sid, title=sid, mode="review", model="m")
+    store.update_session("c", pinned=True)
+    store.update_session("b", pinned=True)  # b pinned later than c
+    order = [row["id"] for row in store.list_sessions()]
+    assert set(order[:2]) == {"b", "c"} and set(order[2:]) == {"a"}
+
+
 # ---------------------------------------------------------------- run state machine
 
 

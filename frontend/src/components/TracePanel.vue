@@ -3,7 +3,11 @@ import { reactive } from 'vue'
 
 defineProps({
   trace: { type: Array, required: true },
+  // embedded mode (steps inside an answer bubble) passes title="" to drop the heading
+  title: { type: String, default: '执行轨迹' },
 })
+
+const STATE_LABELS = { pending: '排队中', running: '运行中', success: '成功', error: '失败' }
 
 // index -> expanded; collapsed by default so a long tool chain stays scannable
 const open = reactive({})
@@ -16,6 +20,13 @@ function isFailed(step) {
   return Boolean(step.result) && step.result.ok === false
 }
 
+/** U3 four-state view of a step: queued -> running -> success | error. */
+function statusFor(step) {
+  if (!step.tool) return 'pending'
+  if (!step.result) return 'running'
+  return step.result.ok ? 'success' : 'error'
+}
+
 function formatMs(ms) {
   return typeof ms === 'number' ? `${ms.toFixed(1)} ms` : ''
 }
@@ -23,7 +34,7 @@ function formatMs(ms) {
 
 <template>
   <section class="trace">
-    <h2>执行轨迹</h2>
+    <h2 v-if="title">{{ title }}</h2>
     <p v-if="!trace.length" class="placeholder">（暂无执行步骤）</p>
     <ol v-else>
       <li
@@ -31,6 +42,7 @@ function formatMs(ms) {
         :key="step.call_id || i"
         class="step"
         :class="{ failed: isFailed(step), pending: !step.result }"
+        :data-status="statusFor(step)"
         data-testid="trace-step"
         @click="toggle(i)"
       >
@@ -38,7 +50,7 @@ function formatMs(ms) {
           <span class="tool">{{ step.tool || '…' }}</span>
           <span class="risk">{{ step.risk }}</span>
           <span v-if="step.result" class="duration">{{ formatMs(step.result.duration_ms) }}</span>
-          <span class="state">{{ step.result ? (step.result.ok ? '成功' : '失败') : '等待结果' }}</span>
+          <span class="state">{{ STATE_LABELS[statusFor(step)] }}</span>
         </div>
         <div v-if="open[i]" class="detail">
           <pre class="args">{{ step.args || '(无参数)' }}</pre>

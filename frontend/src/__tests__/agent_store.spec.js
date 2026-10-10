@@ -113,6 +113,51 @@ describe('agent store — event reducer', () => {
   })
 })
 
+describe('agent store — per-message step snapshots (U3)', () => {
+  beforeEach(() => setActivePinia(createPinia()))
+
+  it('run_started resets the live trace; run_finished moves steps onto the last assistant message', () => {
+    const store = useAgentStore()
+    store.beginLocalRun('r1')
+    store.applyEvent('run_started', { run_id: 'r1', mode: 'review', model: 'm' }, 1)
+    store.applyEvent('text_message_content', { delta: '答案A' }, 2)
+    store.applyEvent('tool_call_start', { call_id: 'c1', tool: 'calculator', risk: 'read' }, 3)
+    store.applyEvent('tool_result', { call_id: 'c1', ok: true, output: '42', duration_ms: 1 }, 4)
+    store.applyEvent('run_finished', { usage: {}, turns: 2 }, 5)
+
+    const msg = store.messages.at(-1)
+    expect(msg.role).toBe('assistant')
+    expect(msg.steps.map((s) => s.call_id)).toEqual(['c1'])
+    expect(store.trace).toEqual([])
+
+    // second run: its steps land on the NEW assistant bubble, the old one keeps its own
+    store.applyEvent('run_started', { run_id: 'r2', mode: 'review', model: 'm' }, 6)
+    store.applyEvent('text_message_content', { delta: '答案B' }, 7)
+    store.applyEvent('tool_call_start', { call_id: 'c2', tool: 'read_text_file', risk: 'read' }, 8)
+    store.applyEvent('run_finished', { usage: {}, turns: 1 }, 9)
+
+    const second = store.messages.at(-1)
+    expect(second.text).toBe('答案B')
+    expect(second.steps.map((s) => s.call_id)).toEqual(['c2'])
+    // 本测试没有 user_message 事件，答案A 就在 index 0：旧气泡保留自己的步骤
+    expect(store.messages[0].steps.map((s) => s.call_id)).toEqual(['c1'])
+    expect(store.messages[0].text).toBe('答案A')
+  })
+
+  it('a run that ends with steps but no text still surfaces them (assistant bubble is created)', () => {
+    const store = useAgentStore()
+    store.beginLocalRun('r1')
+    store.applyEvent('run_started', { run_id: 'r1', mode: 'review', model: 'm' }, 1)
+    store.applyEvent('tool_call_start', { call_id: 'c9', tool: 'calculator', risk: 'read' }, 2)
+    store.applyEvent('tool_result', { call_id: 'c9', ok: false, output: '不合法', duration_ms: 1 }, 3)
+    store.applyEvent('run_error', { kind: 'model', message: 'boom' }, 4)
+    // error path: steps must not be stranded in the live trace either
+    const withSteps = store.messages.find((m) => m.steps && m.steps.length)
+    expect(withSteps).toBeTruthy()
+    expect(withSteps.steps[0].result.ok).toBe(false)
+  })
+})
+
 describe('agent store — history replay', () => {
   beforeEach(() => setActivePinia(createPinia()))
 
@@ -139,7 +184,10 @@ describe('agent store — history replay', () => {
     await store.loadSession('sess_old')
     expect(store.sessionId).toBe('sess_old')
     expect(store.status).toBe('done')
-    expect(store.trace.find((t) => t.call_id === 'c1').result.output).toBe('42')
+    // U3: finished runs snapshot their steps onto the assistant message, not the live trace
+    const answered = store.messages.find((m) => m.role === 'assistant')
+    expect(answered.steps.find((t) => t.call_id === 'c1').result.output).toBe('42')
+    expect(store.trace).toEqual([])
     expect(store.messages.some((m) => m.role === 'user' && m.text === '6*7 是多少')).toBe(true)
     expect(store.messages.some((m) => m.role === 'assistant' && m.text.includes('42'))).toBe(true)
     expect(store.lastEventId).toBe(8)

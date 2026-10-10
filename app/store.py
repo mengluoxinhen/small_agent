@@ -34,6 +34,13 @@ def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="milliseconds")
 
 
+def _session_row(row: sqlite3.Row) -> dict[str, Any]:
+    """SQLite has no BOOLEAN; the UI contract speaks JSON, so pin is a real bool here."""
+    data = dict(row)
+    data["pinned"] = bool(data.get("pinned", 0))
+    return data
+
+
 def _dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False)
 
@@ -68,26 +75,29 @@ class Store:
         row = self.conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
         if row is None:
             raise KeyError(f"会话不存在：{session_id}")
-        return dict(row)
+        return _session_row(row)
 
     def list_sessions(self) -> list[dict[str, Any]]:
-        rows = self.conn.execute("SELECT * FROM sessions ORDER BY created_at DESC, id").fetchall()
-        return [dict(row) for row in rows]
+        rows = self.conn.execute(
+            "SELECT * FROM sessions ORDER BY pinned DESC, updated_at DESC, id"
+        ).fetchall()
+        return [_session_row(row) for row in rows]
 
     def update_session(self, session_id: str, **fields: Any) -> dict[str, Any]:
-        """Patch title/mode; unknown keys are a programming error, not silent SQL."""
-        allowed = {"title", "mode"}
+        """Patch title/mode/pinned; unknown keys are a programming error, not silent SQL."""
+        allowed = {"title", "mode", "pinned"}
         unexpected = set(fields) - allowed
         if unexpected:
             raise ValueError(f"会话只能更新 {sorted(allowed)}，收到 {sorted(unexpected)}")
         if not fields:
             return self.get_session(session_id)
-        assignments = ", ".join(f"{key} = ?" for key in fields)
+        values = {key: int(val) if key == "pinned" else val for key, val in fields.items()}
+        assignments = ", ".join(f"{key} = ?" for key in values)
         with self._immediate():
             self.get_session(session_id)  # existence check inside the transaction
             self.conn.execute(
                 f"UPDATE sessions SET {assignments}, updated_at = ? WHERE id = ?",
-                (*fields.values(), _now(), session_id),
+                (*values.values(), _now(), session_id),
             )
         return self.get_session(session_id)
 
