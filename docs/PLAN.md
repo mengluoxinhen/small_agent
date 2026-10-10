@@ -382,7 +382,7 @@ P2 将新建 `app/tools/`（注册表 + 5 个 builtin 工具 + 风险声明）�
 5. **重命名内联编辑器不加确认弹窗**：Enter 确认、Esc 取消、✓ 按钮兜底；测试锁死"Esc 不得触发 PATCH"。
 6. **真模型手验被外部阻断**：DashScope 账号欠费（错误码 `Arrearage`），qwen3.8-flash 暂不可用；界面改造本身不依赖模型侧（工具步骤/审批用测试同一 seam 的 scripted fake 全链路验证），真实模型回归等你把账号恢复后 `-m live` + `ping_model.py` 复跑即可。**（2026-10-10 已解除：充值后三扇真模型门复跑全过——ping in=67/out=36；`pytest -m live` 通过；三任务门 gate1 review 审批链 turns=4、result.txt=="56"，gate2 纯问答零工具零审批，gate3 full_access write→read→calculator 链、答案含 600；日志 `data/live_gate/gate*.jsonl`；临时驱动脚本与临时数据目录已删）**
 7. **手验抓到一处 RED 期望自错**（非实现 bug）：pin 翻转用例把"已置顶行"的期望写成 pin=true；以 fixture 语义修正为 unpin 方向，并保留"翻转值原样下发"断言。
-8. 收尾纪律执行：删除临时演示 `scripts/_ui_demo.py`、充值后复跑用的临时真模型门驱动 `scripts/_live_gate_scratch.py`，以及 `data_ui_check/`、`data_ui_live/`、`data/live_gate_run/`；`scripts/__pycache__` 残留清除；`git status` 核对——改动只落 U 系列相关文件。U2–U4 未提交，等你发话。
+8. 收尾纪律执行：删除临时演示 `scripts/_ui_demo.py`、充值后复跑用的临时真模型门驱动 `scripts/_live_gate_scratch.py`，以及 `data_ui_check/`、`data_ui_live/`、`data/live_gate_run/`；`scripts/__pycache__` 残留清除；`git status` 核对——改动只落 U 系列相关文件。**U2–U4 已于 2026-10-10 提交 `f00e07d` 并推送 master（远端 API 核验：head 一致、`.env` 仍 404）**。
 
 
 
