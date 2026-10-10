@@ -151,10 +151,9 @@ describe('SessionSidebar (V3)', () => {
     expect(ui.sidebarCollapsed).toBe(false)
   })
 
-  it('the footer carries the brand, the mode readout and a working theme toggle', async () => {
+  it('the footer carries the mode readout and a working theme toggle', async () => {
     const ui = useUiStore()
     const w = mountBar()
-    expect(w.find('[data-testid="sidebar-footer"]').text()).toContain('small_dify Agent')
     expect(w.find('[data-testid="mode"]').text()).toBe('review')
     await w.get('[data-testid="theme-toggle"]').trigger('click')
     expect(ui.theme).toBe('dark')
@@ -167,5 +166,73 @@ describe('SessionSidebar (V3)', () => {
     const w = mountBar()
     expect(w.findAll('[data-testid="session-skeleton"]').length).toBeGreaterThan(0)
     expect(w.find('.session-row').exists()).toBe(false)
+  })
+})
+
+/**
+ * W — the row avatar becomes a run-status indicator (dot / spinner / green /
+ * red), derived from the agent store's existing status machine; a brand row
+ * (logo + name) sits above the new-session button and collapses to the logo.
+ */
+describe('SessionSidebar (W) status indicator + brand', () => {
+  it('renders no initial avatar or per-row gradient hue anymore', () => {
+    const w = mountBar()
+    expect(w.findAll('.avatar').length).toBe(0)
+    expect(w.findAll('[style*="--av-hue"]').length).toBe(0)
+  })
+
+  it('a session that is not the open one reads as idle', () => {
+    const w = mountBar()
+    expect(rowOf(w, 's2').find('[data-testid="session-status"]').attributes('data-status')).toBe('idle')
+  })
+
+  it('the open session shows a spinner while running', () => {
+    store.status = 'streaming'
+    const w = mountBar()
+    const st = rowOf(w, 's1').find('[data-testid="session-status"]')
+    expect(st.attributes('data-status')).toBe('running')
+    expect(st.find('svg').exists()).toBe(true)
+    expect(st.find('.dot').exists()).toBe(false)
+  })
+
+  it('awaiting approval still counts as running', () => {
+    store.status = 'awaiting'
+    const w = mountBar()
+    expect(rowOf(w, 's1').find('[data-testid="session-status"]').attributes('data-status')).toBe('running')
+  })
+
+  it('a finished run shows the green dot; an error shows the red one', async () => {
+    store.status = 'done'
+    const w = mountBar()
+    expect(rowOf(w, 's1').find('[data-testid="session-status"]').attributes('data-status')).toBe('done')
+    store.status = 'error'
+    await w.vm.$nextTick()
+    expect(rowOf(w, 's1').find('[data-testid="session-status"]').attributes('data-status')).toBe('error')
+  })
+
+  it('cancelled falls back to idle rather than claiming an outcome', () => {
+    store.status = 'cancelled'
+    const w = mountBar()
+    expect(rowOf(w, 's1').find('[data-testid="session-status"]').attributes('data-status')).toBe('idle')
+  })
+
+  it('the brand block shows the logo and the product name above the new-session button', () => {
+    const w = mountBar()
+    const brand = w.get('[data-testid="sidebar-brand"]')
+    expect(brand.find('svg').exists()).toBe(true)
+    expect(brand.text()).toContain('small_dify Agent')
+    // ordering: brand precedes the new-session CTA
+    const aside = w.get('aside')
+    expect(aside.element.compareDocumentPosition(w.get('[data-testid="new-session"]').element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('collapsed keeps the logo only', () => {
+    const ui = useUiStore()
+    ui.sidebarCollapsed = true
+    const w = mountBar()
+    const brand = w.get('[data-testid="sidebar-brand"]')
+    expect(brand.find('svg').exists()).toBe(true)
+    expect(brand.text()).toBe('')
+    expect(w.find('[data-testid="new-session"]').exists()).toBe(false)
   })
 })

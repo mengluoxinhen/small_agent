@@ -988,4 +988,23 @@ function onPickFile(event) {
     max-width: 85%;
   }
 }
+
+/* bug 兜底：Markdown 代码块的语言图标 SVG 自身不带尺寸，历史上因未引入
+   markstream 样式表被撑成巨型图标。这里直接钉死 16px，不依赖父容器与外部 CSS。 */
+:deep(.icon-slot svg),
+:deep(.icon-slot img) {
+  width: 16px;
+  height: 16px;
+  max-width: 16px;
+  max-height: 16px;
+  display: block;
+  flex-shrink: 0;
+}
+:deep(.icon-slot) {
+  flex-shrink: 0;
+}
+:deep(.code-block-container) {
+  max-width: 100%;
+  overflow-x: auto;
+}
 </style>

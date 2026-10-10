@@ -404,6 +404,29 @@ P2 将新建 `app/tools/`（注册表 + 5 个 builtin 工具 + 风险声明）�
 6. **Vue scoped `v-bind("`…${}…`")` 模板串是编译器陷阱**：生成畸形自定义属性名并静默失效，必须用简单表达式或由外层 grid 控制宽度。
 7. 收尾纪律：删除 `scripts/_v_demo.py`、`data_v_check/`，8000/5173 端口清空（含一枚 vite 残留进程）；需求变更引发死代码审计：动画/工具类/符号/lucide 导入逐一扫过均有引用，前期已清 Loader 冗余导入、`--glass-border` 死令牌、`<Pin :size="0">` 占位、App 空全局 style 块、▸/✓ 字形→lucide。
 
+### W 系列：侧栏局部修改（2026-10-10，需求=只改左侧会话栏：头像→运行状态指示器 + 顶部品牌区）
+
+| 阶段 | 状态 | 证据 |
+|---|---|---|
+| W1 状态指示器 | **通过** | 删除首字母头像与 `hueFor` 色相逻辑（`.avatar`/`--av-hue` 一并清）；行首改为 7px 状态点/lucer 自旋圈：`idle` 灰点、`running`（streaming/awaiting）主色 Loader 自旋、`done` 绿点 #10B981+呼吸动画、`error` 红点 #EF4444；**状态纯派生**：`statusFor(s)` 只读 `agent.sessionId`/`agent.status`，非当前会话恒 idle，未新造状态系统；150–200ms 过渡、垂直居中；W 测试 8 条（先 RED）：flipped 顺序、awaiting=running、done→error 需 `nextTick`、cancelled 诚实回落 idle |
+| W2 品牌区 | **通过** | aside 首位 `.brand-bar`（56–64px、下分割线）：渐变 chip logo（lucide `Sparkles` 26px）+ 产品名 15px semibold；`BRAND = { name, logo }` 常量置顶并带⚙注释，改图标/名称一处生效；折叠态只留居中 logo（测试锁死 collapsed 时名称不渲染）；底部原 `.brand` 文字随之下线；移动端抽屉天然保留 |
+| W3 回归+手验 | **通过** | vitest 118/118、`vite build` ✓；浏览器（fake 后端 scripted seam）：pinia 直接poke `status=streaming` → 该行 spinner 出现、其余行灰点；done→绿点呼吸；折叠→只显 logo；刷新深链不误报。收尾：临时 launcher/数据删除、端口清空 |
+
+### W 系列实施中的偏差与发现
+1. **done 态只可能属于当前会话**：SSE 状态机是会话级单流（`agent.status` 描述打开中的会话），历史会话无 last-run 状态持久化，故非打开会话统一 idle——诚实派生，不伪造"完成"历史。
+2. **品牌区在 aside 内部**而非 App 外壳：折叠/抽屉/宽度全部沿用既有 grid 与 ui store，零跨组件改动，符合"只改侧栏"约束。
+
+### 聊天区巨型 Python 图标 Bug 修复（2026-10-10，现象=代码块语言图标撑满半屏）
+
+| 项 | 结论 |
+|---|---|
+| 根因 | 不是产物卡片（项目中不存在该组件）。`ChatView.vue:345` 的 markstream-vue `<MarkdownRender>` 渲染代码块头部 `.icon-slot` 语言图标，其 SVG **只有 viewBox 无 width/height**，16px 尺寸规则全在包自带样式表 `markstream-vue/index.css`（`.h-4{height:1rem}`、`.icon-slot svg{width:100%;height:100%}`，README 明确要求引入），而 `main.js` 从未 import → SVG 退化默认尺寸被父容器撑大。js（16 viewBox）/go/无语言同路径同病。此前 fake 回复均为纯文本 + ChatView 单测 mock 掉 MarkdownRender，路径从未执行故未暴露 |
+| 修复 | 双防线：① `main.js` 补 `import 'markstream-vue/index.css'`（theme 之前，主题可覆盖）；② ChatView scoped `:deep` 兜底钉死 `.icon-slot svg/img` 16px（width/height/max-* 四锁 + flex-shrink:0，不依赖父容器与外部 CSS），`.code-block-container` `max-width:100%; overflow-x:auto` 保证代码块高度=内容高度、不横向撑破 |
+| 验证 | 新增 `markdown_render.spec.js` 6 条：两防线内容锁 + 真实 MarkdownRender 跑 python/js/go/无语言断言图标带尺寸约束；vitest **124/124**、`vite build` ✓ 且 dist CSS 含 `.h-4`/`icon-slot svg` 规则；浏览器端到端复现用户场景（"写一个 python 脚本计算 1 到 100 的平方和"→"脚本已保存到 square_sum.py"+```python 围栏）：svg 计算尺寸 16×16、复制按钮在位、流式 status done、控制台零报错；0 宽视口下 slot 仍 16×16——"不随父容器撑开"直接证据（375/1920 因固定 px+max-width 守卫天然安全；像素级截图受 webview 0×0 限制，验证到 computed 层面） |
+| 偏差 | 兜底取 16px 与代码块头部既有比例（图标与文件名/复制按钮同体量）而非规格下限 20px；如需 20–24px 只改 `:deep` 一处。测试内容锁用 `path.resolve(process.cwd(), …)` 读文件——jsdom 下 `new URL(rel, import.meta.url)` 抛 "must be of scheme file" |
+
+收尾纪律：本轮删除 `scripts/_icon_demo.py`、`data_icon_check/`、探测用 `markdown_probe.spec.js`，端口 8000/5173 清空。
+
 
 
 

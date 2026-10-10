@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import {
   Check,
   Copy,
+  Loader,
   Moon,
   MoreHorizontal,
   Pencil,
@@ -11,6 +12,7 @@ import {
   Plus,
   Search,
   Settings,
+  Sparkles,
   Sun,
   Trash2,
   UserRound,
@@ -25,15 +27,28 @@ import ConfirmDialog from './ConfirmDialog.vue'
 
 /**
  * V3 left column: gradient new-session CTA, glowing search with hit highlight,
- * calendar-day groups, avatar-initial rows, and a hover overflow menu
- * (rename / pin / copy link / delete). Deletion goes through ConfirmDialog —
- * window.confirm is banned. The footer carries the mode readout, the settings
- * popover, the theme switch and the user avatar. First load shows skeletons.
+ * calendar-day groups, and a hover overflow menu (rename / pin / copy link /
+ * delete). Deletion goes through ConfirmDialog — window.confirm is banned.
+ * The footer carries the mode readout, the settings popover and the theme
+ * switch. First load shows skeletons.
+ *
+ * W additions: a brand block (logo + product name) sits on top, and every row
+ * leads with a run-status indicator instead of the old initial avatar — the
+ * state is DERIVED from the agent store's existing status machine, never a
+ * second source of truth.
  */
 
 const agent = useAgentStore()
 const ui = useUiStore()
 const toast = useToastStore()
+
+/**
+ * ⚙ 品牌区占位配置：换真 logo 时把 BRAND.logo 换成 <img>（模板 brand-logo 处），
+ * 名称改 BRAND.name 即可，无需触碰其他逻辑。
+ */
+const BRAND = { name: 'small_dify Agent', logo: Sparkles }
+
+const STATUS_HINTS = { idle: '空闲', running: '运行中', done: '本轮已完成', error: '出错' }
 
 const query = ref('')
 const renamingId = ref(null)
@@ -54,6 +69,20 @@ const groups = computed(() => {
   return groupSessions(visible)
 })
 
+/**
+ * W: session-level run state derived from the live store — only the open
+ * session can be running/streaming; everything else is idle. `awaiting`
+ * (approval pause) is still mid-run; `cancelled`/`idle` say nothing.
+ */
+function statusFor(s) {
+  if (s.id !== agent.sessionId) return 'idle'
+  const st = agent.status
+  if (st === 'streaming' || st === 'awaiting') return 'running'
+  if (st === 'error') return 'error'
+  if (st === 'done') return 'done'
+  return 'idle'
+}
+
 /** title split around the first search hit so <mark> can highlight it */
 function segments(text) {
   const q = query.value.trim().toLowerCase()
@@ -66,18 +95,6 @@ function segments(text) {
     { hit: true, s: t.slice(i, i + q.length) },
     { hit: false, s: t.slice(i + q.length) },
   ]
-}
-
-function initials(s) {
-  const t = String(s.title ?? s.id ?? '').trim()
-  return t ? Array.from(t)[0].toUpperCase() : '会'
-}
-
-/** stable hue per session id -> duotone avatar, same chat always same color */
-function hueFor(id) {
-  let h = 0
-  for (const ch of String(id ?? '?')) h = (h * 31 + ch.codePointAt(0)) % 360
-  return h
 }
 
 function choose(s) {
@@ -138,6 +155,13 @@ function doDelete() {
 
 <template>
   <aside class="sidebar" :class="{ collapsed: ui.sidebarCollapsed }">
+    <div class="brand-bar" data-testid="sidebar-brand">
+      <span class="brand-logo">
+        <!-- 占位 logo：换真 logo 时替换整个 component 为 <img :src="..." class="brand-img" /> -->
+        <component :is="BRAND.logo" :size="26" />
+      </span>
+      <span v-if="!ui.sidebarCollapsed" class="brand-name">{{ BRAND.name }}</span>
+    </div>
     <button
       v-if="ui.sidebarCollapsed"
       class="expand"
@@ -172,7 +196,7 @@ function doDelete() {
       <nav class="list">
         <template v-if="!agent.sessionsLoaded">
           <div v-for="n in 4" :key="`sk-${n}`" class="skeleton-row" data-testid="session-skeleton">
-            <span class="sk-avatar"></span>
+            <span class="sk-dot"></span>
             <span class="sk-line"></span>
           </div>
         </template>
@@ -198,7 +222,15 @@ function doDelete() {
                 </button>
               </template>
               <template v-else>
-                <span class="avatar" :style="{ '--av-hue': hueFor(s.id) }">{{ initials(s) }}</span>
+                <span
+                  class="status"
+                  data-testid="session-status"
+                  :data-status="statusFor(s)"
+                  :title="STATUS_HINTS[statusFor(s)]"
+                >
+                  <Loader v-if="statusFor(s) === 'running'" :size="12" class="spin" />
+                  <span v-else class="dot"></span>
+                </span>
                 <button class="title" :title="s.title" @click="choose(s)">
                   <template v-for="(seg, k) in segments(s.title || s.id)" :key="k">
                     <mark v-if="seg.hit">{{ seg.s }}</mark>
@@ -238,9 +270,8 @@ function doDelete() {
 
       <footer class="foot" data-testid="sidebar-footer">
         <div class="foot-row">
-          <span class="avatar me"><UserRound :size="14" /></span>
+          <span class="me-avatar"><UserRound :size="14" /></span>
           <span class="who">
-            <span class="brand">small_dify Agent</span>
             <span class="mode-line">运行模式 <strong data-testid="mode">{{ ui.mode }}</strong></span>
           </span>
           <span class="foot-actions">
@@ -302,11 +333,50 @@ function doDelete() {
   box-sizing: border-box;
   transition: background var(--dur) var(--ease);
 }
+/* --------------------------------------------------------- brand (W) */
+.brand-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 48px;
+  padding: 0.35rem 0.25rem 0.65rem;
+  border-bottom: 1px solid var(--divider);
+}
+.brand-logo {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  background: var(--gradient);
+  color: #fff;
+  box-shadow: var(--shadow-sm);
+}
+.brand-img {
+  width: 26px;
+  height: 26px;
+  object-fit: contain;
+}
+.brand-name {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .sidebar.collapsed {
   width: 44px;
   min-width: 44px;
   align-items: center;
   padding-top: 0.75rem;
+}
+.sidebar.collapsed .brand-bar {
+  padding-left: 0;
+  padding-right: 0;
+  justify-content: center;
 }
 .expand,
 .collapse {
@@ -444,28 +514,55 @@ function doDelete() {
   color: var(--text-1);
   font-weight: 600;
 }
-.avatar {
+/* --------------------------------------------------- status indicator (W) */
+.status {
   flex: 0 0 auto;
-  width: 22px;
-  height: 22px;
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.status .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-pill);
+  background: var(--text-3); /* idle: 灰色小实心点 */
+  transition: background var(--dur-fast) var(--ease), opacity var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+.status[data-status='running'] .spin {
+  color: var(--primary);
+  animation: spin 900ms linear infinite;
+}
+.status[data-status='done'] .dot {
+  background: var(--success); /* #10B981 */
+  animation: dot-breathe 1.6s var(--ease) infinite;
+}
+.status[data-status='error'] .dot {
+  background: var(--danger); /* #EF4444 */
+}
+@keyframes dot-breathe {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.65;
+    transform: scale(0.85);
+  }
+}
+.me-avatar {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-pill);
-  font-size: 11px;
-  font-weight: 700;
-  background: hsl(var(--av-hue, 230) 75% 92%);
-  color: hsl(var(--av-hue, 230) 55% 42%);
-}
-html[data-theme='dark'] .avatar {
-  background: hsl(var(--av-hue, 230) 40% 24%);
-  color: hsl(var(--av-hue, 230) 70% 78%);
-}
-.avatar.me {
   background: var(--gradient);
   color: #fff;
-  width: 26px;
-  height: 26px;
 }
 .title {
   flex: 1;
@@ -583,23 +680,23 @@ html[data-theme='dark'] .avatar {
   gap: 0.45rem;
   padding: 0.55rem 0.35rem;
 }
-.sk-avatar,
+.sk-dot,
 .sk-line {
   position: relative;
   overflow: hidden;
   background: var(--surface-2);
   border-radius: var(--radius-pill);
 }
-.sk-avatar {
-  width: 22px;
-  height: 22px;
+.sk-dot {
+  width: 14px;
+  height: 14px;
   flex: 0 0 auto;
 }
 .sk-line {
   height: 12px;
   flex: 1;
 }
-.sk-avatar::after,
+.sk-dot::after,
 .sk-line::after {
   content: '';
   position: absolute;
@@ -635,11 +732,6 @@ html[data-theme='dark'] .avatar {
   flex-direction: column;
   min-width: 0;
   line-height: 1.35;
-}
-.brand {
-  font-weight: 600;
-  color: var(--text-1);
-  font-size: 0.8rem;
 }
 .mode-line {
   overflow: hidden;
